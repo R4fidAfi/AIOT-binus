@@ -243,7 +243,7 @@ def open_active_webcam(preferred_index: int = 0) -> Tuple[Optional[cv2.VideoCapt
     Qualcomm Snapdragon / Dragonwing QRB2210 often reserves /dev/video0 and /dev/video1
     for internal ISP / VFE hardware pipelines. When a USB webcam is attached (even through a hub),
     Linux assigns it to /dev/video0, /dev/video2, or higher.
-    Includes sensor warm-up (up to 5 reads) so exposure and V4L2 queue stabilize without dropping the device.
+    Tests native camera format first (YUYV/default) before attempting MJPG to ensure broad hardware compatibility.
     """
     candidate_indices = [preferred_index]
     if os.name != "nt":
@@ -258,6 +258,8 @@ def open_active_webcam(preferred_index: int = 0) -> Tuple[Optional[cv2.VideoCapt
     for i in range(8):
         if i not in candidate_indices:
             candidate_indices.append(i)
+
+    print(f"[CAMERA_SCAN] Probing candidate video indices: {candidate_indices}", flush=True)
 
     # Retry up to 3 attempts with brief pause to handle V4L2 device availability
     for attempt in range(3):
@@ -274,31 +276,52 @@ def open_active_webcam(preferred_index: int = 0) -> Tuple[Optional[cv2.VideoCapt
                     if cap is None or not cap.isOpened():
                         cap = cv2.VideoCapture(idx)
 
-                if cap is not None and cap.isOpened():
-                    # Configure lightweight 640x480 MJPG @ 20 FPS for UNO Q CPU efficiency
-                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                    cap.set(cv2.CAP_PROP_FPS, 20)
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                if cap is None or not cap.isOpened():
+                    continue
 
-                    # Sensor warm-up loop: give camera 3-5 frame cycles to settle AGC/AEC
-                    frame_ok = False
+                # Configure standard 640x480 @ 20 FPS
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_FPS, 20)
+
+                # Test 1: Native format read with sensor warm-up (up to 5 reads)
+                frame_ok = False
+                for _ in range(5):
+                    ret, test_frame = cap.read()
+                    if ret and test_frame is not None and test_frame.size > 0:
+                        frame_ok = True
+                        print(
+                            f"[CAMERA_SCAN] SUCCESS: Opened physical camera on video{idx} "
+                            f"(native format, {test_frame.shape[1]}x{test_frame.shape[0]})",
+                            flush=True,
+                        )
+                        return cap, idx
+                    time.sleep(0.04)
+
+                # Test 2: If native read failed, negotiate MJPG compression
+                if not frame_ok:
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                     for _ in range(5):
                         ret, test_frame = cap.read()
                         if ret and test_frame is not None and test_frame.size > 0:
                             frame_ok = True
+                            print(
+                                f"[CAMERA_SCAN] SUCCESS: Opened physical camera on video{idx} "
+                                f"(MJPG format, {test_frame.shape[1]}x{test_frame.shape[0]})",
+                                flush=True,
+                            )
                             return cap, idx
-                        time.sleep(0.03)
+                        time.sleep(0.04)
 
-                    if not frame_ok:
-                        cap.release()
-            except Exception:
+                cap.release()
+            except Exception as e:
+                print(f"[CAMERA_SCAN] Warning probing video{idx}: {e}", flush=True)
                 continue
 
         if attempt < 2:
-            time.sleep(0.15)
+            time.sleep(0.2)
 
+    print("[CAMERA_SCAN] NOTICE: No active physical webcam responded. Using live viewfinder.", flush=True)
     return None, preferred_index
 
 
