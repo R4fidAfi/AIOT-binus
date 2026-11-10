@@ -391,14 +391,25 @@ async def api_capture_leaf_side(
     if file is not None:
         uploaded_bytes = await file.read()
 
-    abs_path, url_path, meta = capture_leaf_surface(
-        side=side_norm,
-        variety=active_variety,
-        scenario=active_scenario,
-        hst=active_hst,
-        soil_moisture=float(telemetry["soil_moisture"]),
-        uploaded_bytes=uploaded_bytes,
-    )
+    try:
+        abs_path, url_path, meta = capture_leaf_surface(
+            side=side_norm,
+            variety=active_variety,
+            scenario=active_scenario,
+            hst=active_hst,
+            soil_moisture=float(telemetry["soil_moisture"]),
+            uploaded_bytes=uploaded_bytes,
+        )
+    except Exception as exc:
+        print(f"[CAPTURE_FALLBACK_TRIGGERED] Error: {exc}", flush=True)
+        abs_path, url_path, meta = capture_leaf_surface(
+            side=side_norm,
+            variety=active_variety,
+            scenario=active_scenario,
+            hst=active_hst,
+            soil_moisture=float(telemetry["soil_moisture"]),
+            prefer_simulation=True,
+        )
 
     if side_norm == "top":
         CURRENT_SESSION["top_abs_path"] = abs_path

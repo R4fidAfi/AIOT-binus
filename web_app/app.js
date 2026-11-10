@@ -646,6 +646,11 @@ async function handleSingleFrameCapture() {
       method: 'POST',
       body: formData,
     });
+    if (!res.ok) {
+      const errBody = await res.text();
+      console.error(`Capture HTTP error ${res.status}:`, errBody);
+      throw new Error(`HTTP ${res.status}`);
+    }
     const data = await res.json();
     const cacheBusted = `${data.image_url}?t=${Date.now()}`;
 

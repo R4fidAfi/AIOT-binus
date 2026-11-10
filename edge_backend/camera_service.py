@@ -286,6 +286,7 @@ class CameraWorkerThread(threading.Thread):
     """
     Dedicated worker thread that continuously drains frames from the V4L2 kernel ring buffer.
     Eliminates the 4-frame kernel backlog delay, reducing preview latency from ~1200ms to <40ms.
+    Safely shuts down on stop() without deadlocking V4L2 release.
     """
 
     def __init__(self, cap: cv2.VideoCapture):
@@ -296,13 +297,18 @@ class CameraWorkerThread(threading.Thread):
         self.lock = threading.Lock()
 
     def run(self):
-        while self.running and self.cap.isOpened():
-            ret, frame = self.cap.read()
-            if ret and frame is not None and frame.size > 0:
-                with self.lock:
-                    self.latest_frame = frame
-            else:
-                time.sleep(0.005)
+        while self.running:
+            try:
+                if self.cap is None or not self.cap.isOpened():
+                    break
+                ret, frame = self.cap.read()
+                if ret and frame is not None and frame.size > 0:
+                    with self.lock:
+                        self.latest_frame = frame
+                else:
+                    time.sleep(0.01)
+            except Exception:
+                break
 
     def get_frame(self) -> Optional[np.ndarray]:
         with self.lock:
@@ -379,6 +385,7 @@ class OnDemandWebcamController:
             if self.worker is not None:
                 try:
                     self.worker.stop()
+                    self.worker.join(timeout=0.15)
                 except Exception:
                     pass
                 self.worker = None
@@ -520,9 +527,12 @@ def capture_leaf_surface(
             frame = decoded
             source_mode = "UPLOADED_IMAGE"
 
-    # If live webcam was streaming, grab the exact live frame and immediately release the camera!
+    # Grab the current real-time frame from active webcam preview
     if frame is None and not prefer_simulation:
-        if webcam_controller.is_streaming:
+        if webcam_controller.last_frame is not None and webcam_controller.last_frame.size > 0:
+            frame = webcam_controller.last_frame.copy()
+            source_mode = webcam_controller.last_source_mode
+        elif webcam_controller.is_streaming:
             frame = webcam_controller.read_preview_frame(
                 side=side,
                 variety=variety,
@@ -531,15 +541,12 @@ def capture_leaf_surface(
                 soil_moisture=soil_moisture,
             )
             source_mode = webcam_controller.last_source_mode
-            # Immediately release camera hardware and turn off LED Ring!
-            webcam_controller.stop_camera()
-        elif webcam_controller.last_frame is not None and webcam_controller.active_side == side:
-            frame = webcam_controller.last_frame.copy()
-            source_mode = webcam_controller.last_source_mode
-            webcam_controller.stop_camera()
 
-    # Fallback if called directly (e.g., initial DB seeding on startup)
-    if frame is None:
+        # Safely stop camera and release resources after frame has been secured
+        webcam_controller.stop_camera()
+
+    # Fallback if called directly or if frame read failed
+    if frame is None or frame.size == 0:
         webcam_controller.stop_camera()
         frame = generate_realistic_kangkung_leaf(
             side=side,
@@ -552,7 +559,8 @@ def capture_leaf_surface(
 
     rig_bridge.last_trigger_step = 1 if side == "top" else 2
 
-    # Save compressed JPEG (88% quality for eMMC longevity)
+    # Save compressed JPEG to disk
+    os.makedirs(CAPTURE_DIR, exist_ok=True)
     cv2.imwrite(abs_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
 
