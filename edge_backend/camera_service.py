@@ -242,42 +242,62 @@ def open_active_webcam(preferred_index: int = 0) -> Tuple[Optional[cv2.VideoCapt
     Auto-detects and opens the physical USB webcam on Linux (Arduino UNO Q) or Windows.
     Qualcomm Snapdragon / Dragonwing QRB2210 often reserves /dev/video0 and /dev/video1
     for internal ISP / VFE hardware pipelines. When a USB webcam is attached (even through a hub),
-    Linux assigns it to /dev/video2, /dev/video4, or higher.
-    This helper scans candidate indices to reliably locate the actual UVC camera.
+    Linux assigns it to /dev/video0, /dev/video2, or higher.
+    Includes sensor warm-up (up to 5 reads) so exposure and V4L2 queue stabilize without dropping the device.
     """
     candidate_indices = [preferred_index]
+    if os.name != "nt":
+        # Scan real /dev/video* devices on Debian ARM64
+        video_nodes = sorted(glob.glob("/dev/video*"))
+        for v in video_nodes:
+            suffix = v.replace("/dev/video", "")
+            if suffix.isdigit():
+                idx_num = int(suffix)
+                if idx_num not in candidate_indices:
+                    candidate_indices.append(idx_num)
     for i in range(8):
         if i not in candidate_indices:
             candidate_indices.append(i)
 
-    for idx in candidate_indices:
-        try:
-            cap = None
-            if os.name == "nt":
-                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                if cap is None or not cap.isOpened():
-                    cap = cv2.VideoCapture(idx)
-            else:
-                # Explicitly use V4L2 backend on Linux Debian ARM64
-                cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
-                if cap is None or not cap.isOpened():
-                    cap = cv2.VideoCapture(idx)
-
-            if cap is not None and cap.isOpened():
-                # Configure lightweight 640x480 MJPG @ 10 FPS for UNO Q CPU efficiency
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                cap.set(cv2.CAP_PROP_FPS, 10)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-                ret, test_frame = cap.read()
-                if ret and test_frame is not None and test_frame.size > 0:
-                    return cap, idx
+    # Retry up to 3 attempts with brief pause to handle V4L2 device availability
+    for attempt in range(3):
+        for idx in candidate_indices:
+            try:
+                cap = None
+                if os.name == "nt":
+                    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                    if cap is None or not cap.isOpened():
+                        cap = cv2.VideoCapture(idx)
                 else:
-                    cap.release()
-        except Exception:
-            continue
+                    # Explicitly use V4L2 backend on Linux Debian ARM64
+                    cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+                    if cap is None or not cap.isOpened():
+                        cap = cv2.VideoCapture(idx)
+
+                if cap is not None and cap.isOpened():
+                    # Configure lightweight 640x480 MJPG @ 20 FPS for UNO Q CPU efficiency
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    cap.set(cv2.CAP_PROP_FPS, 20)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+                    # Sensor warm-up loop: give camera 3-5 frame cycles to settle AGC/AEC
+                    frame_ok = False
+                    for _ in range(5):
+                        ret, test_frame = cap.read()
+                        if ret and test_frame is not None and test_frame.size > 0:
+                            frame_ok = True
+                            return cap, idx
+                        time.sleep(0.03)
+
+                    if not frame_ok:
+                        cap.release()
+            except Exception:
+                continue
+
+        if attempt < 2:
+            time.sleep(0.15)
 
     return None, preferred_index
 
@@ -297,16 +317,21 @@ class CameraWorkerThread(threading.Thread):
         self.lock = threading.Lock()
 
     def run(self):
+        consecutive_errors = 0
         while self.running:
             try:
                 if self.cap is None or not self.cap.isOpened():
                     break
                 ret, frame = self.cap.read()
                 if ret and frame is not None and frame.size > 0:
+                    consecutive_errors = 0
                     with self.lock:
                         self.latest_frame = frame
                 else:
-                    time.sleep(0.01)
+                    consecutive_errors += 1
+                    if consecutive_errors > 40:
+                        break
+                    time.sleep(0.02)
             except Exception:
                 break
 
@@ -320,9 +345,11 @@ class CameraWorkerThread(threading.Thread):
 
 class OnDemandWebcamController:
     """
-    Manages the USB Webcam lifecycle on Arduino UNO Q so the camera is ONLY active
-    between clicking 'Nyalakan Kamera' and 'Ambil Foto'.
-    Automatically releases the camera hardware immediately upon photo capture or after 60s timeout.
+    Manages the USB Webcam lifecycle on Arduino UNO Q:
+    1. Keeps hardware handle warm between top and bottom surfaces (Daun Atas -> Daun Bawah)
+       with 0% CPU when paused, eliminating V4L2 EBUSY lockout and simulated leaf fallback.
+    2. Delivers zero-lag MJPEG stream (~20 FPS) via CameraWorkerThread while live.
+    3. Completely releases hardware (release_hardware()) when AI inference executes or session resets.
     """
 
     def __init__(self, camera_index: int = 0):
@@ -335,57 +362,119 @@ class OnDemandWebcamController:
         self.last_frame: Optional[np.ndarray] = None
         self.last_source_mode: str = "STANDBY"
         self.stream_started_at: float = 0.0
+        self.last_activity_at: float = time.time()
         self.lock = threading.Lock()
-        self.max_stream_seconds: float = 60.0  # Auto-sleep safety timeout
+        self.max_stream_seconds: float = 90.0  # Auto-pause safety timeout for continuous stream
 
     def start_camera(self, side: str = "top") -> Dict[str, Any]:
-        """Turn ON LED Ring and open USB Webcam for live preview with zero-lag worker thread."""
+        """
+        Turn ON LED Ring and resume/open USB Webcam.
+        Keeps the hardware handle warm between top and bottom surfaces, preventing Linux V4L2
+        EBUSY lockouts and eliminating dummy AI leaf fallback.
+        """
         with self.lock:
             self.active_side = "top" if side.lower() not in ("bottom", "bawah") else "bottom"
             self.stream_started_at = time.time()
+            self.last_activity_at = time.time()
             rig_bridge.set_led_ring(True, pwm=225)
 
-            if self.cap is None or not self.cap.isOpened():
-                # Try opening physical USB webcam (unless explicitly disabled via DISABLE_USB_WEBCAM=1)
+            hardware_ready = False
+
+            # 1. Fast path: check if existing hardware handle is already alive and responsive
+            if self.cap is not None and self.cap.isOpened():
+                try:
+                    for _ in range(3):
+                        ret, test_frame = self.cap.read()
+                        if ret and test_frame is not None and test_frame.size > 0:
+                            self.last_frame = test_frame
+                            hardware_ready = True
+                            break
+                        time.sleep(0.02)
+                except Exception:
+                    hardware_ready = False
+
+                if not hardware_ready:
+                    # Stale or disconnected handle, release before re-acquiring
+                    try:
+                        self.cap.release()
+                    except Exception:
+                        pass
+                    self.cap = None
+
+            # 2. Slow path: open physical webcam if not already open
+            if not hardware_ready:
                 if os.environ.get("DISABLE_USB_WEBCAM", "0") != "1":
                     cap, working_idx = open_active_webcam(self.camera_index)
                     if cap is not None and cap.isOpened():
                         self.cap = cap
                         self.camera_index = working_idx
-                        ret, test_frame = self.cap.read()
-                        if ret and test_frame is not None and test_frame.size > 0:
-                            self.last_frame = test_frame
-                        # Launch dedicated low-latency reader thread
-                        self.worker = CameraWorkerThread(self.cap)
-                        self.worker.start()
-                        self.last_source_mode = f"USB_WEBCAM_LIVE (video{working_idx})"
+                        hardware_ready = True
+                        for _ in range(3):
+                            ret, test_frame = self.cap.read()
+                            if ret and test_frame is not None and test_frame.size > 0:
+                                self.last_frame = test_frame
+                                break
+                            time.sleep(0.02)
                     else:
                         self.cap = None
 
             self.is_streaming = True
-            mode_label = (
-                self.last_source_mode
-                if (self.cap is not None and self.cap.isOpened())
-                else "VIRTUAL_WEBCAM_VIEWFINDER"
-            )
-            self.last_source_mode = mode_label
+
+            # 3. Launch dedicated low-latency reader thread
+            if hardware_ready and self.cap is not None:
+                if self.worker is None or not self.worker.is_alive():
+                    self.worker = CameraWorkerThread(self.cap)
+                    self.worker.start()
+                self.last_source_mode = f"USB_WEBCAM_LIVE (video{self.camera_index})"
+            else:
+                self.last_source_mode = "VIRTUAL_WEBCAM_VIEWFINDER"
+
             return {
                 "is_streaming": True,
                 "side": self.active_side,
-                "source_mode": mode_label,
+                "source_mode": self.last_source_mode,
                 "fps_limit": 20,
                 "resolution": "640x480",
                 "led_ring_on": rig_bridge.led_on,
             }
 
-    def stop_camera(self) -> Dict[str, Any]:
-        """Immediately stop live stream, release USB Webcam from RAM/CPU, and turn OFF LED Ring."""
+    def pause_stream(self) -> Dict[str, Any]:
+        """
+        Pauses live stream loop and turns OFF LED Ring, while KEEPING the physical
+        cv2.VideoCapture handle warm in memory. Eliminates V4L2 EBUSY device lockout
+        when transitioning between Daun Atas and Daun Bawah.
+        CPU load is 0% during pause because worker thread is safely stopped.
+        """
+        with self.lock:
+            self.is_streaming = False
+            self.last_activity_at = time.time()
+            if self.worker is not None:
+                try:
+                    self.worker.stop()
+                    self.worker.join(timeout=0.25)
+                except Exception:
+                    pass
+                self.worker = None
+
+            rig_bridge.set_led_ring(False, pwm=0)
+            return {
+                "is_streaming": False,
+                "led_ring_on": False,
+                "hardware_warm": self.cap is not None and self.cap.isOpened(),
+                "status": "STREAM_PAUSED_HARDWARE_WARM",
+            }
+
+    def release_hardware(self) -> Dict[str, Any]:
+        """
+        Completely releases the USB Webcam hardware handle (cap.release()), stops worker thread,
+        and turns OFF LED Ring. Frees all RAM and CPU for 5-Stage AI Pipeline or full session reset.
+        """
         with self.lock:
             self.is_streaming = False
             if self.worker is not None:
                 try:
                     self.worker.stop()
-                    self.worker.join(timeout=0.15)
+                    self.worker.join(timeout=0.25)
                 except Exception:
                     pass
                 self.worker = None
@@ -396,12 +485,21 @@ class OnDemandWebcamController:
                 except Exception:
                     pass
                 self.cap = None
+
             rig_bridge.set_led_ring(False, pwm=0)
+            self.last_source_mode = "STANDBY"
             return {
                 "is_streaming": False,
                 "led_ring_on": False,
-                "status": "CAMERA_RELEASED_ZERO_LOAD",
+                "hardware_warm": False,
+                "status": "HARDWARE_COMPLETELY_RELEASED",
             }
+
+    def stop_camera(self, release_hw: bool = False) -> Dict[str, Any]:
+        """Backward-compatible stop call. Default keeps hardware warm between surfaces."""
+        if release_hw:
+            return self.release_hardware()
+        return self.pause_stream()
 
     def read_preview_frame(
         self,
@@ -413,6 +511,7 @@ class OnDemandWebcamController:
     ) -> np.ndarray:
         """Read latest instantaneous frame with 0-frame buffer backlog."""
         with self.lock:
+            self.last_activity_at = time.time()
             if self.worker is not None:
                 live_frame = self.worker.get_frame()
                 if live_frame is not None and live_frame.size > 0:
@@ -427,7 +526,15 @@ class OnDemandWebcamController:
                     self.last_source_mode = f"USB_WEBCAM_LIVE (video{self.camera_index})"
                     return frame
 
-            # Fallback live viewfinder with subtle natural movement so the user sees live responsiveness
+            # If webcam frame exists in self.last_frame (e.g. while worker is starting up), return it
+            if (
+                self.last_frame is not None
+                and self.last_frame.size > 0
+                and (self.cap is not None and self.cap.isOpened())
+            ):
+                return self.last_frame.copy()
+
+            # Fallback live viewfinder with subtle natural movement only if physical webcam is truly absent
             t = time.time()
             shift_x = int(math.sin(t * 2.2) * 5.0)
             shift_y = int(math.cos(t * 1.7) * 4.0)
@@ -454,7 +561,7 @@ class OnDemandWebcamController:
     ) -> Generator[bytes, None, None]:
         """
         Yields multipart MJPEG frames at smooth ~20 FPS while self.is_streaming is True.
-        Automatically terminates and releases hardware when stopped or after 60s timeout.
+        Automatically pauses when stopped or after 90s timeout.
         """
         self.start_camera(side=side)
         frame_interval = 0.05  # Snappy 20 FPS preview with zero buffer backlog
@@ -462,7 +569,7 @@ class OnDemandWebcamController:
         try:
             while self.is_streaming:
                 if (time.time() - self.stream_started_at) > self.max_stream_seconds:
-                    self.stop_camera()
+                    self.pause_stream()
                     break
 
                 t_start = time.perf_counter()
@@ -488,7 +595,6 @@ class OnDemandWebcamController:
                 sleep_rem = max(0.01, frame_interval - elapsed)
                 time.sleep(sleep_rem)
         finally:
-            # Ensure camera is released if client disconnects stream
             pass
 
 
@@ -529,25 +635,32 @@ def capture_leaf_surface(
 
     # Grab the current real-time frame from active webcam preview
     if frame is None and not prefer_simulation:
-        if webcam_controller.last_frame is not None and webcam_controller.last_frame.size > 0:
+        if webcam_controller.worker is not None:
+            live = webcam_controller.worker.get_frame()
+            if live is not None and live.size > 0:
+                frame = live.copy()
+                source_mode = webcam_controller.last_source_mode
+
+        if frame is None and webcam_controller.last_frame is not None and webcam_controller.last_frame.size > 0:
             frame = webcam_controller.last_frame.copy()
             source_mode = webcam_controller.last_source_mode
-        elif webcam_controller.is_streaming:
-            frame = webcam_controller.read_preview_frame(
-                side=side,
-                variety=variety,
-                scenario=scenario,
-                hst=hst,
-                soil_moisture=soil_moisture,
-            )
-            source_mode = webcam_controller.last_source_mode
 
-        # Safely stop camera and release resources after frame has been secured
-        webcam_controller.stop_camera()
+        if frame is None and webcam_controller.cap is not None and webcam_controller.cap.isOpened():
+            for _ in range(3):
+                ret, direct_frame = webcam_controller.cap.read()
+                if ret and direct_frame is not None and direct_frame.size > 0:
+                    frame = direct_frame.copy()
+                    source_mode = f"USB_WEBCAM_LIVE (video{webcam_controller.camera_index})"
+                    break
+                time.sleep(0.02)
+
+        # Pause stream and turn off LED ring, but KEEP cv2.VideoCapture handle warm!
+        # This guarantees transitioning to Daun Bawah (or retrying Daun Atas) never hits V4L2 EBUSY.
+        webcam_controller.pause_stream()
 
     # Fallback if called directly or if frame read failed
     if frame is None or frame.size == 0:
-        webcam_controller.stop_camera()
+        webcam_controller.pause_stream()
         frame = generate_realistic_kangkung_leaf(
             side=side,
             variety=variety,
@@ -568,8 +681,8 @@ def capture_leaf_surface(
         "side": side,
         "side_label": "Permukaan Atas (Adaksial)" if side == "top" else "Permukaan Bawah (Abaksial)",
         "source_mode": source_mode,
-        "camera_released_after_capture": True,
-        "led_sync_protocol": "LIVE_ON_DEMAND -> CAPTURE_LOCK -> AUTO_RELEASE_CAMERA_AND_LED",
+        "hardware_kept_warm": webcam_controller.cap is not None and webcam_controller.cap.isOpened(),
+        "led_sync_protocol": "LIVE_STREAM -> CAPTURE_FRAME -> PAUSE_STREAM_KEEP_HW_WARM",
         "capture_ms": elapsed_ms,
         "resolution": f"{frame.shape[1]}x{frame.shape[0]}",
     }

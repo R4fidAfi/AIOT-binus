@@ -338,9 +338,9 @@ def api_start_live_webcam(payload: Optional[CameraControlPayload] = None) -> Dic
 @app.post("/api/v1/camera/stop")
 def api_stop_live_webcam() -> Dict[str, Any]:
     """
-    Immediately stops the live stream, releases the USB Webcam from RAM/CPU, and turns OFF the LED Ring.
+    Pauses live stream and turns OFF LED Ring while keeping hardware handle warm.
     """
-    info = webcam_controller.stop_camera()
+    info = webcam_controller.pause_stream()
     return {"status": "CAMERA_OFF", "camera": info}
 
 
@@ -439,7 +439,7 @@ async def api_capture_leaf_side(
 
 @app.post("/api/v1/capture/reset")
 def api_reset_capture_session() -> Dict[str, Any]:
-    webcam_controller.stop_camera()
+    webcam_controller.release_hardware()
     CURRENT_SESSION["top_abs_path"] = None
     CURRENT_SESSION["top_url"] = None
     CURRENT_SESSION["top_meta"] = None
@@ -457,8 +457,8 @@ def api_analyze_dual_surface(payload: Optional[AnalyzeDualPayload] = None) -> Di
     and Bottom (Abaxial) leaf images, fuses with microclimate + topsoil moisture + HST,
     saves to SQLite, and returns the complete diagnosis.
     """
-    # Ensure camera is 100% OFF before starting 5-stage AI inference
-    webcam_controller.stop_camera()
+    # Ensure camera is 100% OFF and hardware completely released before starting 5-stage AI inference
+    webcam_controller.release_hardware()
     settings = get_farm_settings()
     telemetry = get_latest_telemetry()
     recent_window = get_recent_telemetry_window(hours=6)
