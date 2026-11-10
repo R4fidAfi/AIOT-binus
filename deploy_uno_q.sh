@@ -42,6 +42,7 @@ Type=simple
 User=${USER}
 WorkingDirectory=${APP_DIR}
 Environment="WEBCAM_INDEX=auto"
+ExecStartPre=/bin/bash -c 'for r in /sys/class/usb_role/*/role; do echo host > "$r" 2>/dev/null || true; done'
 ExecStart=${APP_DIR}/.venv/bin/python ${APP_DIR}/run_webapp.py
 Restart=always
 RestartSec=3
