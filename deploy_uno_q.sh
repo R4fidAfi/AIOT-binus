@@ -13,11 +13,11 @@ echo " Deploying Ipomoea Edge-AIoT Server on Arduino UNO Q"
 echo " Workspace: ${APP_DIR}"
 echo "================================================================"
 
-# 1. Install system-level OpenCV V4L2 camera & Python dependencies
+# 1. Install system-level OpenCV V4L2 camera & Python dependencies (non-fatal if captive portal/firewall)
 if command -v apt-get >/dev/null 2>&1; then
   echo "[1/4] Checking Linux V4L2 & Python3 dependencies..."
-  sudo apt-get update -y
-  sudo apt-get install -y python3 python3-pip python3-venv v4l-utils libgl1 libglib2.0-0
+  sudo apt-get update -y || echo "Peringatan: apt-get update dilewati (menggunakan paket bawaan board)."
+  sudo apt-get install -y python3 python3-pip python3-venv v4l-utils libgl1 libglib2.0-0 || echo "Peringatan: Paket sistem sudah terpasang atau dilewati."
 fi
 
 # 2. Setup virtual environment and install Python packages
