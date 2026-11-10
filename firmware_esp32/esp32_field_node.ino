@@ -15,11 +15,11 @@
 #include <DHT.h>
 
 // ---------------- WIFI & ARDUINO UNO Q SERVER CONFIG ----------------
-const char* WIFI_SSID     = "NAMA_WIFI_ATAU_HOTSPOT_ANDA";
-const char* WIFI_PASSWORD = "PASSWORD_WIFI_ANDA";
+const char* WIFI_SSID     = "realme C25";
+const char* WIFI_PASSWORD = "asdfghjkl";
 
 // Ganti IP di bawah dengan IP Arduino UNO Q (atau Laptop saat uji coba)
-const char* UNO_Q_API_URL = "http://192.168.1.17:8000/api/v1/telemetry";
+const char* UNO_Q_API_URL = "http://10.32.69.156:8000/api/v1/telemetry";
 const char* NODE_ID       = "ESP32-FIELD-01";
 
 // ---------------- PIN DEFINITIONS & CALIBRATION ---------------------
