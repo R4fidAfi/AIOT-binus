@@ -41,7 +41,7 @@ After=network.target
 Type=simple
 User=${USER}
 WorkingDirectory=${APP_DIR}
-Environment="WEBCAM_INDEX=0"
+Environment="WEBCAM_INDEX=auto"
 ExecStart=${APP_DIR}/.venv/bin/python ${APP_DIR}/run_webapp.py
 Restart=always
 RestartSec=3

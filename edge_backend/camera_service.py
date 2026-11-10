@@ -237,6 +237,51 @@ def generate_realistic_kangkung_leaf(
     return img
 
 
+def open_active_webcam(preferred_index: int = 0) -> Tuple[Optional[cv2.VideoCapture], int]:
+    """
+    Auto-detects and opens the physical USB webcam on Linux (Arduino UNO Q) or Windows.
+    Qualcomm Snapdragon / Dragonwing QRB2210 often reserves /dev/video0 and /dev/video1
+    for internal ISP / VFE hardware pipelines. When a USB webcam is attached (even through a hub),
+    Linux assigns it to /dev/video2, /dev/video4, or higher.
+    This helper scans candidate indices to reliably locate the actual UVC camera.
+    """
+    candidate_indices = [preferred_index]
+    for i in range(8):
+        if i not in candidate_indices:
+            candidate_indices.append(i)
+
+    for idx in candidate_indices:
+        try:
+            cap = None
+            if os.name == "nt":
+                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                if cap is None or not cap.isOpened():
+                    cap = cv2.VideoCapture(idx)
+            else:
+                # Explicitly use V4L2 backend on Linux Debian ARM64
+                cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+                if cap is None or not cap.isOpened():
+                    cap = cv2.VideoCapture(idx)
+
+            if cap is not None and cap.isOpened():
+                # Configure lightweight 640x480 MJPG @ 10 FPS for UNO Q CPU efficiency
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_FPS, 10)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+                ret, test_frame = cap.read()
+                if ret and test_frame is not None and test_frame.size > 0:
+                    return cap, idx
+                else:
+                    cap.release()
+        except Exception:
+            continue
+
+    return None, preferred_index
+
+
 class OnDemandWebcamController:
     """
     Manages the USB Webcam lifecycle on Arduino UNO Q so the camera is ONLY active
@@ -245,7 +290,8 @@ class OnDemandWebcamController:
     """
 
     def __init__(self, camera_index: int = 0):
-        self.camera_index = int(os.environ.get("WEBCAM_INDEX", camera_index))
+        env_idx = os.environ.get("WEBCAM_INDEX", "").strip()
+        self.camera_index = int(env_idx) if env_idx.isdigit() else camera_index
         self.cap: Optional[cv2.VideoCapture] = None
         self.is_streaming: bool = False
         self.active_side: str = "top"
@@ -265,42 +311,20 @@ class OnDemandWebcamController:
             if self.cap is None or not self.cap.isOpened():
                 # Try opening physical USB webcam (unless explicitly disabled via DISABLE_USB_WEBCAM=1)
                 if os.environ.get("DISABLE_USB_WEBCAM", "0") != "1":
-                    try:
-                        cap = None
-                        if os.name == "nt":
-                            cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
-                            if cap is None or not cap.isOpened():
-                                cap = cv2.VideoCapture(self.camera_index)
-                        else:
-                            cap = cv2.VideoCapture(self.camera_index)
-                        if cap is not None and cap.isOpened():
-                            # Configure lightweight 640x480 MJPG @ 10 FPS for UNO Q CPU efficiency
-                            cap.set(
-                                cv2.CAP_PROP_FOURCC,
-                                cv2.VideoWriter_fourcc(*"MJPG"),
-                            )
-                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                            cap.set(cv2.CAP_PROP_FPS, 10)
-                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                            ret, test_frame = cap.read()
-                            if ret and test_frame is not None and test_frame.size > 0:
-                                self.cap = cap
-                                self.last_frame = test_frame
-                                self.last_source_mode = "USB_WEBCAM_LIVE"
-                            else:
-                                cap.release()
-                                self.cap = None
-                        else:
-                            if cap is not None:
-                                cap.release()
-                            self.cap = None
-                    except Exception:
+                    cap, working_idx = open_active_webcam(self.camera_index)
+                    if cap is not None and cap.isOpened():
+                        self.cap = cap
+                        self.camera_index = working_idx
+                        ret, test_frame = self.cap.read()
+                        if ret and test_frame is not None and test_frame.size > 0:
+                            self.last_frame = test_frame
+                        self.last_source_mode = f"USB_WEBCAM_LIVE (video{working_idx})"
+                    else:
                         self.cap = None
 
             self.is_streaming = True
             mode_label = (
-                "USB_WEBCAM_LIVE"
+                self.last_source_mode
                 if (self.cap is not None and self.cap.isOpened())
                 else "VIRTUAL_WEBCAM_VIEWFINDER"
             )
