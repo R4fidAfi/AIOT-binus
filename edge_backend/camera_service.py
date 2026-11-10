@@ -266,8 +266,11 @@ class OnDemandWebcamController:
                 # Try opening physical USB webcam (unless explicitly disabled via DISABLE_USB_WEBCAM=1)
                 if os.environ.get("DISABLE_USB_WEBCAM", "0") != "1":
                     try:
+                        cap = None
                         if os.name == "nt":
                             cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+                            if cap is None or not cap.isOpened():
+                                cap = cv2.VideoCapture(self.camera_index)
                         else:
                             cap = cv2.VideoCapture(self.camera_index)
                         if cap is not None and cap.isOpened():

@@ -265,6 +265,17 @@ function updateWizardSteps(stepNum) {
 }
 
 /* ================= SINGLE CAMERA FRAME STATE MACHINE (STANDBY -> LIVE WEBCAM -> CAPTURE & AUTO-OFF) ================= */
+function setElementVisibility(el, visible, displayStyle = 'block') {
+  if (!el) return;
+  if (visible) {
+    el.classList.remove('hidden');
+    el.style.display = displayStyle;
+  } else {
+    el.classList.add('hidden');
+    el.style.display = 'none';
+  }
+}
+
 function renderSingleCameraUI() {
   const singleStage = document.getElementById('singleCaptureStage');
   const dualResultStage = document.getElementById('dualResultPhotosStage');
@@ -278,6 +289,8 @@ function renderSingleCameraUI() {
   const liveStreamImg = document.getElementById('singleLiveStreamImg');
   const liveOverlayBadge = document.getElementById('liveStreamOverlayBadge');
   const liveBadgeText = document.getElementById('liveStreamBadgeText');
+  const validationOverlayBadge = document.getElementById('validationOverlayBadge');
+  const validationBadgeText = document.getElementById('validationBadgeText');
   const previewImg = document.getElementById('singlePreviewImg');
   const standbyBox = document.getElementById('singleActionStandbyBox');
   const btnTurnOnLabel = document.getElementById('btnTurnOnCameraLabel');
@@ -286,155 +299,295 @@ function renderSingleCameraUI() {
   const validateBox = document.getElementById('singleActionValidateBox');
   const valPrompt = document.getElementById('validationPromptText');
   const confirmLabel = document.getElementById('btnConfirmPhotoLabel');
+  const btnDeleteCapturedLabel = document.getElementById('btnDeleteCapturedLabel');
+
+  // Mini Thumbnail Strip Elements
+  const miniThumbTop = document.getElementById('miniThumbTop');
+  const miniEmptyTop = document.getElementById('miniEmptyTop');
+  const badgeStatusTop = document.getElementById('badgeStatusTop');
+  const descStatusTop = document.getElementById('descStatusTop');
+  const cardStatusTop = document.getElementById('cardStatusTop');
+
+  const miniThumbBottom = document.getElementById('miniThumbBottom');
+  const miniEmptyBottom = document.getElementById('miniEmptyBottom');
+  const badgeStatusBottom = document.getElementById('badgeStatusBottom');
+  const descStatusBottom = document.getElementById('descStatusBottom');
+  const cardStatusBottom = document.getElementById('cardStatusBottom');
 
   const phase = APP_STATE.capturePhase;
 
+  // Sync Mini Thumbnail Strip
+  if (APP_STATE.topUrls && APP_STATE.topUrls.orig) {
+    if (miniThumbTop) {
+      miniThumbTop.src = APP_STATE.topUrls.orig;
+      setElementVisibility(miniThumbTop, true);
+    }
+    setElementVisibility(miniEmptyTop, false);
+    if (phase === 'TOP_VALIDATE') {
+      if (badgeStatusTop) {
+        badgeStatusTop.textContent = 'Memeriksa';
+        badgeStatusTop.className = 'text-[9px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 shrink-0';
+      }
+      if (descStatusTop) descStatusTop.textContent = 'Sedang divalidasi';
+      if (cardStatusTop) cardStatusTop.className = 'p-2 rounded-lg border-2 border-amber-400 bg-amber-50/40 flex items-center gap-2.5 transition';
+    } else {
+      if (badgeStatusTop) {
+        badgeStatusTop.textContent = 'Tersimpan';
+        badgeStatusTop.className = 'text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 shrink-0';
+      }
+      if (descStatusTop) descStatusTop.textContent = 'Foto atas siap';
+      if (cardStatusTop) cardStatusTop.className = 'p-2 rounded-lg border border-emerald-300 bg-emerald-50/30 flex items-center gap-2.5 transition';
+    }
+  } else {
+    setElementVisibility(miniThumbTop, false);
+    setElementVisibility(miniEmptyTop, true, 'block');
+    if (badgeStatusTop) {
+      badgeStatusTop.textContent = phase === 'TOP_LIVE' ? 'Membidik' : 'Standby';
+      badgeStatusTop.className = phase === 'TOP_LIVE'
+        ? 'text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 shrink-0'
+        : 'text-[9px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0';
+    }
+    if (descStatusTop) descStatusTop.textContent = phase === 'TOP_LIVE' ? 'Kamera aktif' : 'Menunggu difoto';
+    if (cardStatusTop) cardStatusTop.className = 'p-2 rounded-lg border border-slate-200 bg-white flex items-center gap-2.5 transition';
+  }
+
+  if (APP_STATE.bottomUrls && APP_STATE.bottomUrls.orig) {
+    if (miniThumbBottom) {
+      miniThumbBottom.src = APP_STATE.bottomUrls.orig;
+      setElementVisibility(miniThumbBottom, true);
+    }
+    setElementVisibility(miniEmptyBottom, false);
+    if (phase === 'BOTTOM_VALIDATE') {
+      if (badgeStatusBottom) {
+        badgeStatusBottom.textContent = 'Memeriksa';
+        badgeStatusBottom.className = 'text-[9px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 shrink-0';
+      }
+      if (descStatusBottom) descStatusBottom.textContent = 'Sedang divalidasi';
+      if (cardStatusBottom) cardStatusBottom.className = 'p-2 rounded-lg border-2 border-amber-400 bg-amber-50/40 flex items-center gap-2.5 transition';
+    } else {
+      if (badgeStatusBottom) {
+        badgeStatusBottom.textContent = 'Tersimpan';
+        badgeStatusBottom.className = 'text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 shrink-0';
+      }
+      if (descStatusBottom) descStatusBottom.textContent = 'Foto bawah siap';
+      if (cardStatusBottom) cardStatusBottom.className = 'p-2 rounded-lg border border-emerald-300 bg-emerald-50/30 flex items-center gap-2.5 transition';
+    }
+  } else {
+    setElementVisibility(miniThumbBottom, false);
+    setElementVisibility(miniEmptyBottom, true, 'block');
+    if (badgeStatusBottom) {
+      badgeStatusBottom.textContent = phase === 'BOTTOM_LIVE' ? 'Membidik' : (phase === 'BOTTOM_STANDBY' ? 'Siap' : 'Menunggu');
+      badgeStatusBottom.className = (phase === 'BOTTOM_LIVE' || phase === 'BOTTOM_STANDBY')
+        ? 'text-[9px] font-semibold px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 shrink-0'
+        : 'text-[9px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0';
+    }
+    if (descStatusBottom) {
+      descStatusBottom.textContent = phase === 'BOTTOM_LIVE' ? 'Kamera aktif' : (phase === 'BOTTOM_STANDBY' ? 'Siap difoto' : 'Tahap 2');
+    }
+    if (cardStatusBottom) {
+      cardStatusBottom.className = (phase === 'BOTTOM_STANDBY' || phase === 'BOTTOM_LIVE')
+        ? 'p-2 rounded-lg border border-sky-300 bg-sky-50/30 flex items-center gap-2.5 transition'
+        : 'p-2 rounded-lg border border-slate-200 bg-white flex items-center gap-2.5 transition';
+    }
+  }
+
+  // State Transitions for Camera Frame
   if (phase === 'TOP_STANDBY') {
     updateWizardSteps(1);
-    singleStage.classList.remove('hidden');
-    dualResultStage.classList.add('hidden');
-    topPill.classList.add('hidden');
+    setElementVisibility(singleStage, true);
+    setElementVisibility(dualResultStage, false);
+    setElementVisibility(topPill, false);
 
-    badge.textContent = 'TAHAP 1 DARI 2 • PERMUKAAN ATAS DAUN (KAMERA STANDBY)';
-    badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-300';
-    title.textContent = 'Siapkan Daun Bagian Atas';
-    desc.textContent = 'Letakkan permukaan atas daun di bawah webcam, lalu tekan tombol Nyalakan Kamera.';
+    if (badge) {
+      badge.textContent = 'TAHAP 1 DARI 2 • PERMUKAAN ATAS DAUN (KAMERA STANDBY)';
+      badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-300';
+    }
+    if (title) title.textContent = 'Siapkan Permukaan Atas Daun';
+    if (desc) desc.textContent = 'Posisikan permukaan atas daun di bawah webcam, lalu tekan tombol "Nyalakan Kamera".';
 
-    placeholder.classList.remove('hidden');
-    phTitle.textContent = 'Kamera Dalam Posisi Standby (Hemat RAM UNO Q)';
-    phSub.textContent = 'Tekan tombol "Nyalakan Kamera" di bawah saat daun sudah diletakkan di tatakan';
-    liveStreamImg.classList.add('hidden');
-    liveStreamImg.src = '';
-    liveOverlayBadge.classList.add('hidden');
-    previewImg.classList.add('hidden');
-    previewImg.src = '';
+    setElementVisibility(placeholder, true, 'flex');
+    if (phTitle) phTitle.textContent = 'Kamera Dalam Posisi Standby (Hemat RAM UNO Q)';
+    if (phSub) phSub.textContent = 'Tekan tombol "Nyalakan Kamera" di bawah saat daun sudah diletakkan di tatakan';
 
-    standbyBox.classList.remove('hidden');
-    btnTurnOnLabel.textContent = 'Nyalakan Kamera (Bagian Atas Daun)';
-    captureBox.classList.add('hidden');
-    validateBox.classList.add('hidden');
+    setElementVisibility(liveStreamImg, false);
+    if (liveStreamImg) liveStreamImg.src = '';
+    setElementVisibility(liveOverlayBadge, false);
+
+    setElementVisibility(previewImg, false);
+    if (previewImg) previewImg.src = '';
+    setElementVisibility(validationOverlayBadge, false);
+
+    setElementVisibility(standbyBox, true);
+    if (btnTurnOnLabel) btnTurnOnLabel.textContent = 'Nyalakan Kamera (Bagian Atas Daun)';
+    setElementVisibility(captureBox, false);
+    setElementVisibility(validateBox, false);
+
   } else if (phase === 'TOP_LIVE') {
     updateWizardSteps(1);
-    singleStage.classList.remove('hidden');
-    dualResultStage.classList.add('hidden');
-    topPill.classList.add('hidden');
+    setElementVisibility(singleStage, true);
+    setElementVisibility(dualResultStage, false);
+    setElementVisibility(topPill, false);
 
-    badge.textContent = 'TAHAP 1 DARI 2 • LIVE WEBCAM DAUN ATAS AKTIF';
-    badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200';
-    title.textContent = 'Bidikan Real-Time Bagian Atas Daun';
-    desc.textContent = 'Pastikan posisi daun atas sudah pas di layar, lalu tekan Ambil Foto Daun Atas.';
+    if (badge) {
+      badge.textContent = 'TAHAP 1 DARI 2 • LIVE WEBCAM DAUN ATAS AKTIF';
+      badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200';
+    }
+    if (title) title.textContent = 'Bidikan Real-Time Bagian Atas Daun';
+    if (desc) desc.textContent = 'Pastikan posisi daun atas sudah pas dan fokus, lalu tekan "Ambil Foto Daun Atas".';
 
-    placeholder.classList.add('hidden');
-    previewImg.classList.add('hidden');
-    previewImg.src = '';
-    liveStreamImg.src = `/api/v1/camera/stream?side=top&t=${Date.now()}`;
-    liveStreamImg.classList.remove('hidden');
-    liveOverlayBadge.classList.remove('hidden');
-    liveBadgeText.textContent = 'LIVE WEBCAM • DAUN ATAS';
+    setElementVisibility(placeholder, false);
+    setElementVisibility(previewImg, false);
+    if (previewImg) previewImg.src = '';
+    setElementVisibility(validationOverlayBadge, false);
 
-    standbyBox.classList.add('hidden');
-    captureBox.classList.remove('hidden');
-    captureLabel.textContent = 'Ambil Foto Daun Atas';
-    validateBox.classList.add('hidden');
+    if (liveStreamImg) {
+      liveStreamImg.src = `/api/v1/camera/stream?side=top&t=${Date.now()}`;
+      setElementVisibility(liveStreamImg, true);
+    }
+    setElementVisibility(liveOverlayBadge, true, 'flex');
+    if (liveBadgeText) liveBadgeText.textContent = 'LIVE WEBCAM • DAUN ATAS';
+
+    setElementVisibility(standbyBox, false);
+    setElementVisibility(captureBox, true, 'grid');
+    if (captureLabel) captureLabel.textContent = 'Ambil Foto Daun Atas';
+    setElementVisibility(validateBox, false);
+
   } else if (phase === 'TOP_VALIDATE') {
     updateWizardSteps(1);
-    singleStage.classList.remove('hidden');
-    dualResultStage.classList.add('hidden');
-    topPill.classList.add('hidden');
+    setElementVisibility(singleStage, true);
+    setElementVisibility(dualResultStage, false);
+    setElementVisibility(topPill, false);
 
-    badge.textContent = 'VALIDASI FOTO 1 • PERMUKAAN ATAS DAUN (KAMERA NONAKTIF)';
-    badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200';
-    title.textContent = 'Periksa Hasil Foto Daun Atas';
-    desc.textContent = 'Foto berhasil dikunci dan kamera telah dimatikan otomatis. Periksa kejelasan gambar.';
+    if (badge) {
+      badge.textContent = 'VALIDASI FOTO 1 • PERIKSA HASIL FOTO DAUN ATAS';
+      badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-300';
+    }
+    if (title) title.textContent = 'Periksa Hasil Foto Daun Atas';
+    if (desc) desc.textContent = 'Foto berhasil dikunci dan kamera telah dimatikan otomatis. Pastikan kejelasan gambar.';
 
-    placeholder.classList.add('hidden');
-    liveStreamImg.classList.add('hidden');
-    liveStreamImg.src = '';
-    liveOverlayBadge.classList.add('hidden');
-    previewImg.src = APP_STATE.topUrls.orig;
-    previewImg.classList.remove('hidden');
+    setElementVisibility(placeholder, false);
+    setElementVisibility(liveStreamImg, false);
+    if (liveStreamImg) liveStreamImg.src = '';
+    setElementVisibility(liveOverlayBadge, false);
 
-    standbyBox.classList.add('hidden');
-    captureBox.classList.add('hidden');
-    validateBox.classList.remove('hidden');
-    valPrompt.textContent = 'Apakah foto daun bagian atas ini sudah jelas dan tepat?';
-    confirmLabel.textContent = 'Sudah Tepat, Lanjut Foto Bawah';
+    // Tampilkan hasil foto tangkapan tepat di dalam frame kamera
+    if (previewImg && APP_STATE.topUrls && APP_STATE.topUrls.orig) {
+      previewImg.src = APP_STATE.topUrls.orig;
+      setElementVisibility(previewImg, true);
+    }
+    setElementVisibility(validationOverlayBadge, true, 'flex');
+    if (validationBadgeText) validationBadgeText.textContent = 'PRATINJAU TERSIMPAN • FOTO DAUN ATAS';
+
+    setElementVisibility(standbyBox, false);
+    setElementVisibility(captureBox, false);
+    setElementVisibility(validateBox, true);
+    if (valPrompt) valPrompt.textContent = 'Apakah hasil foto daun bagian atas ini sudah jelas dan tepat?';
+    if (confirmLabel) confirmLabel.textContent = 'Sudah Tepat, Lanjut Foto Bawah';
+    if (btnDeleteCapturedLabel) btnDeleteCapturedLabel.textContent = 'Ambil Ulang Foto Daun Atas';
+
   } else if (phase === 'BOTTOM_STANDBY') {
     updateWizardSteps(2);
-    singleStage.classList.remove('hidden');
-    dualResultStage.classList.add('hidden');
-    topPill.classList.remove('hidden');
+    setElementVisibility(singleStage, true);
+    setElementVisibility(dualResultStage, false);
+    setElementVisibility(topPill, true);
 
-    badge.textContent = 'TAHAP 2 DARI 2 • BALIK DAUN KE BAGIAN BAWAH (KAMERA STANDBY)';
-    badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-sky-800 border border-sky-200';
-    title.textContent = 'Balik Daun & Siapkan Bagian Bawah Daun';
-    desc.textContent = 'Balik daun pada tatakan untuk memeriksa bintil putih, lalu tekan Nyalakan Kamera.';
+    if (badge) {
+      badge.textContent = 'TAHAP 2 DARI 2 • BALIK DAUN KE BAGIAN BAWAH (STANDBY)';
+      badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-sky-800 border border-sky-200';
+    }
+    if (title) title.textContent = 'Balik Daun & Siapkan Bagian Bawah Daun';
+    if (desc) desc.textContent = 'Balik daun pada tatakan untuk memeriksa permukaan bawah, lalu tekan tombol "Nyalakan Kamera".';
 
-    placeholder.classList.remove('hidden');
-    phTitle.textContent = 'Kamera Standby Sambil Anda Membalik Daun';
-    phSub.textContent = 'Setelah daun dibalik menghadap kamera, tekan "Nyalakan Kamera" di bawah';
-    liveStreamImg.classList.add('hidden');
-    liveStreamImg.src = '';
-    liveOverlayBadge.classList.add('hidden');
-    previewImg.classList.add('hidden');
-    previewImg.src = '';
+    setElementVisibility(placeholder, true, 'flex');
+    if (phTitle) phTitle.textContent = 'Foto Daun Atas Tersimpan • Siapkan Daun Bawah';
+    if (phSub) phSub.textContent = 'Setelah daun dibalik menghadap webcam, tekan "Nyalakan Kamera" di bawah';
 
-    standbyBox.classList.remove('hidden');
-    btnTurnOnLabel.textContent = 'Nyalakan Kamera (Bagian Bawah Daun)';
-    captureBox.classList.add('hidden');
-    validateBox.classList.add('hidden');
+    setElementVisibility(liveStreamImg, false);
+    if (liveStreamImg) liveStreamImg.src = '';
+    setElementVisibility(liveOverlayBadge, false);
+
+    setElementVisibility(previewImg, false);
+    if (previewImg) previewImg.src = '';
+    setElementVisibility(validationOverlayBadge, false);
+
+    setElementVisibility(standbyBox, true);
+    if (btnTurnOnLabel) btnTurnOnLabel.textContent = 'Nyalakan Kamera (Bagian Bawah Daun)';
+    setElementVisibility(captureBox, false);
+    setElementVisibility(validateBox, false);
+
   } else if (phase === 'BOTTOM_LIVE') {
     updateWizardSteps(2);
-    singleStage.classList.remove('hidden');
-    dualResultStage.classList.add('hidden');
-    topPill.classList.remove('hidden');
+    setElementVisibility(singleStage, true);
+    setElementVisibility(dualResultStage, false);
+    setElementVisibility(topPill, true);
 
-    badge.textContent = 'TAHAP 2 DARI 2 • LIVE WEBCAM DAUN BAWAH AKTIF';
-    badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-sky-800 border border-sky-200';
-    title.textContent = 'Bidikan Real-Time Bagian Bawah Daun';
-    desc.textContent = 'Pastikan permukaan bawah daun terlihat jelas, lalu tekan Ambil Foto Daun Bawah.';
+    if (badge) {
+      badge.textContent = 'TAHAP 2 DARI 2 • LIVE WEBCAM DAUN BAWAH AKTIF';
+      badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-sky-800 border border-sky-200';
+    }
+    if (title) title.textContent = 'Bidikan Real-Time Bagian Bawah Daun';
+    if (desc) desc.textContent = 'Pastikan permukaan bawah daun terlihat jelas, lalu tekan "Ambil Foto Daun Bawah".';
 
-    placeholder.classList.add('hidden');
-    previewImg.classList.add('hidden');
-    previewImg.src = '';
-    liveStreamImg.src = `/api/v1/camera/stream?side=bottom&t=${Date.now()}`;
-    liveStreamImg.classList.remove('hidden');
-    liveOverlayBadge.classList.remove('hidden');
-    liveBadgeText.textContent = 'LIVE WEBCAM • DAUN BAWAH';
+    setElementVisibility(placeholder, false);
+    setElementVisibility(previewImg, false);
+    if (previewImg) previewImg.src = '';
+    setElementVisibility(validationOverlayBadge, false);
 
-    standbyBox.classList.add('hidden');
-    captureBox.classList.remove('hidden');
-    captureLabel.textContent = 'Ambil Foto Daun Bawah';
-    validateBox.classList.add('hidden');
+    if (liveStreamImg) {
+      liveStreamImg.src = `/api/v1/camera/stream?side=bottom&t=${Date.now()}`;
+      setElementVisibility(liveStreamImg, true);
+    }
+    setElementVisibility(liveOverlayBadge, true, 'flex');
+    if (liveBadgeText) liveBadgeText.textContent = 'LIVE WEBCAM • DAUN BAWAH';
+
+    setElementVisibility(standbyBox, false);
+    setElementVisibility(captureBox, true, 'grid');
+    if (captureLabel) captureLabel.textContent = 'Ambil Foto Daun Bawah';
+    setElementVisibility(validateBox, false);
+
   } else if (phase === 'BOTTOM_VALIDATE') {
     updateWizardSteps(2);
-    singleStage.classList.remove('hidden');
-    dualResultStage.classList.add('hidden');
-    topPill.classList.remove('hidden');
+    setElementVisibility(singleStage, true);
+    setElementVisibility(dualResultStage, false);
+    setElementVisibility(topPill, true);
 
-    badge.textContent = 'VALIDASI FOTO 2 • PERMUKAAN BAWAH DAUN (KAMERA NONAKTIF)';
-    badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200';
-    title.textContent = 'Periksa Hasil Foto Daun Bawah';
-    desc.textContent = 'Kamera telah dimatikan otomatis. Jika sudah tepat, sistem akan langsung memproses kedua foto.';
+    if (badge) {
+      badge.textContent = 'VALIDASI FOTO 2 • PERIKSA HASIL FOTO DAUN BAWAH';
+      badge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-300';
+    }
+    if (title) title.textContent = 'Periksa Hasil Foto Daun Bawah';
+    if (desc) desc.textContent = 'Foto daun bawah berhasil dikunci dan kamera dimatikan. Periksa apakah foto sudah jelas.';
 
-    placeholder.classList.add('hidden');
-    liveStreamImg.classList.add('hidden');
-    liveStreamImg.src = '';
-    liveOverlayBadge.classList.add('hidden');
-    previewImg.src = APP_STATE.bottomUrls.orig;
-    previewImg.classList.remove('hidden');
+    setElementVisibility(placeholder, false);
+    setElementVisibility(liveStreamImg, false);
+    if (liveStreamImg) liveStreamImg.src = '';
+    setElementVisibility(liveOverlayBadge, false);
 
-    standbyBox.classList.add('hidden');
-    captureBox.classList.add('hidden');
-    validateBox.classList.remove('hidden');
-    valPrompt.textContent = 'Apakah foto daun bagian bawah ini sudah jelas dan tepat?';
-    confirmLabel.textContent = 'Sudah Tepat, Proses Sekarang';
+    // Tampilkan hasil foto tangkapan daun bawah tepat di dalam frame kamera
+    if (previewImg && APP_STATE.bottomUrls && APP_STATE.bottomUrls.orig) {
+      previewImg.src = APP_STATE.bottomUrls.orig;
+      setElementVisibility(previewImg, true);
+    }
+    setElementVisibility(validationOverlayBadge, true, 'flex');
+    if (validationBadgeText) validationBadgeText.textContent = 'PRATINJAU TERSIMPAN • FOTO DAUN BAWAH';
+
+    setElementVisibility(standbyBox, false);
+    setElementVisibility(captureBox, false);
+    setElementVisibility(validateBox, true);
+    if (valPrompt) valPrompt.textContent = 'Apakah hasil foto daun bagian bawah ini sudah jelas dan tepat?';
+    if (confirmLabel) confirmLabel.textContent = 'Sudah Tepat, Analisis Kesehatan Kangkung';
+    if (btnDeleteCapturedLabel) btnDeleteCapturedLabel.textContent = 'Ambil Ulang Foto Daun Bawah';
+
   } else {
-    liveStreamImg.classList.add('hidden');
-    liveStreamImg.src = '';
-    liveOverlayBadge.classList.add('hidden');
-    singleStage.classList.add('hidden');
-    dualResultStage.classList.remove('hidden');
+    // PROCESSING & DONE
+    if (liveStreamImg) {
+      liveStreamImg.src = '';
+      setElementVisibility(liveStreamImg, false);
+    }
+    setElementVisibility(liveOverlayBadge, false);
+    setElementVisibility(validationOverlayBadge, false);
+    setElementVisibility(singleStage, false);
+    setElementVisibility(dualResultStage, true);
   }
 }
 
@@ -468,7 +621,7 @@ async function stopLiveWebcamToStandby(silent = false) {
   const liveStreamImg = document.getElementById('singleLiveStreamImg');
   if (liveStreamImg) {
     liveStreamImg.src = '';
-    liveStreamImg.classList.add('hidden');
+    setElementVisibility(liveStreamImg, false);
   }
   try {
     await fetch('/api/v1/camera/stop', { method: 'POST' });
@@ -500,7 +653,7 @@ async function handleSingleFrameCapture() {
     const liveStreamImg = document.getElementById('singleLiveStreamImg');
     if (liveStreamImg) {
       liveStreamImg.src = '';
-      liveStreamImg.classList.add('hidden');
+      setElementVisibility(liveStreamImg, false);
     }
 
     if (isTop) {
@@ -522,12 +675,12 @@ function deleteCurrentCapturedPhoto() {
     APP_STATE.topUrls = { orig: null, mask: null, stage: null };
     APP_STATE.capturePhase = 'TOP_STANDBY';
     renderSingleCameraUI();
-    showToast('Foto daun atas dihapus. Klik "Nyalakan Kamera" untuk memotret ulang.');
+    showToast('Foto daun atas dihapus. Klik "Nyalakan Kamera" untuk memotret ulang daun atas.');
   } else if (APP_STATE.capturePhase === 'BOTTOM_VALIDATE') {
     APP_STATE.bottomUrls = { orig: null, mask: null, stage: null };
     APP_STATE.capturePhase = 'BOTTOM_STANDBY';
     renderSingleCameraUI();
-    showToast('Foto daun bawah dihapus. Klik "Nyalakan Kamera" untuk memotret ulang.');
+    showToast('Foto daun bawah dihapus. Klik "Nyalakan Kamera" untuk memotret ulang daun bawah (Foto daun atas tetap tersimpan).');
   }
 }
 
@@ -535,7 +688,7 @@ async function confirmCurrentCapturedPhoto() {
   if (APP_STATE.capturePhase === 'TOP_VALIDATE') {
     APP_STATE.capturePhase = 'BOTTOM_STANDBY';
     renderSingleCameraUI();
-    showToast('Foto atas disimpan. Balik daun lalu klik "Nyalakan Kamera" untuk bagian bawah.');
+    showToast('Foto daun atas tersimpan. Balik daun ke bagian bawah, lalu klik "Nyalakan Kamera".');
   } else if (APP_STATE.capturePhase === 'BOTTOM_VALIDATE') {
     APP_STATE.capturePhase = 'PROCESSING';
     renderSingleCameraUI();

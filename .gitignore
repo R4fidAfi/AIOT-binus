@@ -15,11 +15,15 @@ edge_backend/*.db
 
 # Large Dataset (Ribuan foto disimpan terpisah via Google Drive/Roboflow)
 dataset/
+*.zip
 
 # Local Webcam Captures
 captures/*.jpg
 captures/*.png
+edge_backend/captures/*.jpg
+edge_backend/captures/*.png
 !captures/.gitkeep
+!edge_backend/captures/.gitkeep
 
 # IDE & OS Files
 .vscode/

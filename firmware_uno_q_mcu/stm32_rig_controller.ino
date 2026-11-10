@@ -1,4 +1,4 @@
-/*
+python uji_webcam.py 1/*
  * ============================================================================
  * Arduino UNO Q — STM32U585 Real-Time MCU Co-Processor Firmware
  * Controls:
