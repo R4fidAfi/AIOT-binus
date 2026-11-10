@@ -1,0 +1,28 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments & Dependencies
+venv/
+env/
+.env
+
+# SQLite Local Database (Supaya database lokal tidak saling menimpa)
+*.db
+*.sqlite3
+edge_backend/*.db
+
+# Large Dataset (Ribuan foto disimpan terpisah via Google Drive/Roboflow)
+dataset/
+
+# Local Webcam Captures
+captures/*.jpg
+captures/*.png
+!captures/.gitkeep
+
+# IDE & OS Files
+.vscode/
+Thumbs.db
+desktop.ini
+.DS_Store

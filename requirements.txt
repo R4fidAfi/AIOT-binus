@@ -1,0 +1,9 @@
+fastapi>=0.110.0
+uvicorn>=0.28.0
+python-multipart>=0.0.9
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+pydantic>=2.6.0
+# Optional on Arduino UNO Q / Edge Deployment:
+# onnxruntime>=1.17.0
