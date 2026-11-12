@@ -18,7 +18,7 @@ if command -v apt-get >/dev/null 2>&1; then
   echo "[1/4] Checking Linux V4L2 & Python3 dependencies..."
   sudo apt-get update -y || echo "Peringatan: apt-get update dilewati (menggunakan paket bawaan board)."
   sudo apt-get install -y python3 python3-pip python3-venv v4l-utils libgl1 libglib2.0-0 || echo "Peringatan: Paket sistem sudah terpasang atau dilewati."
-  sudo usermod -aG video "${USER}" 2>/dev/null || true
+  sudo usermod -aG video,dialout "${USER}" 2>/dev/null || true
 fi
 
 # 2. Setup virtual environment and install Python packages
@@ -41,10 +41,10 @@ After=network.target
 [Service]
 Type=simple
 User=${USER}
-SupplementaryGroups=video
+SupplementaryGroups=video dialout
 WorkingDirectory=${APP_DIR}
 Environment="WEBCAM_INDEX=auto"
-ExecStartPre=+/bin/bash -c 'for r in /sys/class/usb_role/*/role; do echo host > "\$r" 2>/dev/null || true; done; chmod 666 /dev/video* 2>/dev/null || true'
+ExecStartPre=+/bin/bash -c 'for r in /sys/class/usb_role/*/role; do echo host > "\$r" 2>/dev/null || true; done; chmod 666 /dev/video* /dev/ttyHS* /dev/ttyACM* /dev/ttyUSB* 2>/dev/null || true'
 ExecStart=${APP_DIR}/.venv/bin/python ${APP_DIR}/run_webapp.py
 Restart=always
 RestartSec=3

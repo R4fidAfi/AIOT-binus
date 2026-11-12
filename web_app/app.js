@@ -301,6 +301,21 @@ function renderSingleCameraUI() {
   const confirmLabel = document.getElementById('btnConfirmPhotoLabel');
   const btnDeleteCapturedLabel = document.getElementById('btnDeleteCapturedLabel');
 
+  // Auto-reconnect protection for live MJPEG stream
+  if (liveStreamImg && !liveStreamImg._hasStreamErrorHandler) {
+    liveStreamImg._hasStreamErrorHandler = true;
+    liveStreamImg.addEventListener('error', () => {
+      if (APP_STATE.capturePhase === 'TOP_LIVE' || APP_STATE.capturePhase === 'BOTTOM_LIVE') {
+        setTimeout(() => {
+          if (APP_STATE.capturePhase === 'TOP_LIVE' || APP_STATE.capturePhase === 'BOTTOM_LIVE') {
+            const side = APP_STATE.capturePhase === 'TOP_LIVE' ? 'top' : 'bottom';
+            liveStreamImg.src = `/api/v1/camera/stream?side=${side}&t=${Date.now()}`;
+          }
+        }, 1000);
+      }
+    });
+  }
+
   // Mini Thumbnail Strip Elements
   const miniThumbTop = document.getElementById('miniThumbTop');
   const miniEmptyTop = document.getElementById('miniEmptyTop');

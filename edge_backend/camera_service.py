@@ -24,6 +24,25 @@ CAPTURE_DIR = os.path.join(BASE_DIR, "captures")
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 
 
+def ensure_usb_host_mode() -> None:
+    """
+    Self-healing routine for Qualcomm Dragonwing QRB2210 DWC3 USB controller.
+    Restores Host Mode automatically if USB VBUS momentarily fluctuated or reset,
+    ensuring the USB-C Hub and physical Webcam remain continuously powered and detected.
+    """
+    if os.name != "nt":
+        for role_path in glob.glob("/sys/class/usb_role/*/role"):
+            try:
+                with open(role_path, "r") as f:
+                    role = f.read().strip()
+                if role != "host":
+                    with open(role_path, "w") as f:
+                        f.write("host\n")
+                    print(f"[USB_CONTROLLER] Restored {role_path} to host mode", flush=True)
+            except Exception:
+                pass
+
+
 class STM32RigBridge:
     """
     Hardware Bridge to STM32U585 MCU on Arduino UNO Q (Serial/IPC).
@@ -38,17 +57,64 @@ class STM32RigBridge:
         self.pwm_value = 220
         self.last_trigger_step = 0  # 0: Idle, 1: Top Captured, 2: Bottom Captured
         self.mcu_connected = False
+        self.serial_conn = None
+        self._lock = threading.Lock()
+        self._init_serial_connection()
+
+    def _init_serial_connection(self) -> None:
+        """Auto-detect and connect to the onboard STM32U585 UART port on Arduino UNO Q."""
+        try:
+            import serial  # type: ignore
+
+            candidates = []
+            if self.serial_port:
+                candidates.append(self.serial_port)
+            if os.name != "nt":
+                candidates.extend(
+                    glob.glob("/dev/ttyHS*")
+                    + glob.glob("/dev/ttyMSM*")
+                    + glob.glob("/dev/ttyACM*")
+                    + glob.glob("/dev/ttyUSB*")
+                )
+            else:
+                candidates.extend(["COM31", "COM3", "COM4"])
+
+            for port in candidates:
+                try:
+                    s = serial.Serial(port, self.baudrate, timeout=0.1)
+                    if s.is_open:
+                        self.serial_conn = s
+                        self.serial_port = port
+                        self.mcu_connected = True
+                        print(f"[STM32_BRIDGE] Connected to STM32 MCU at {port}", flush=True)
+                        break
+                except Exception:
+                    continue
+        except ImportError:
+            pass
 
     def set_led_ring(self, state: bool, pwm: int = 220) -> Dict[str, Any]:
-        self.led_on = bool(state)
-        self.pwm_value = max(0, min(255, int(pwm))) if state else 0
-        return {
-            "led_on": self.led_on,
-            "pwm": self.pwm_value,
-            "pin": "D3 (PWM MOSFET)",
-            "mcu_mode": "HARDWARE_IPC" if self.mcu_connected else "READY_BRIDGE",
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
-        }
+        with self._lock:
+            self.led_on = bool(state)
+            self.pwm_value = max(0, min(255, int(pwm))) if state else 0
+
+            # Forward hardware command to STM32U585 MCU over Serial/IPC
+            if self.serial_conn and self.serial_conn.is_open:
+                try:
+                    cmd = f"LED_ON:{self.pwm_value}\n" if self.led_on else "LED_OFF\n"
+                    self.serial_conn.write(cmd.encode("utf-8"))
+                    self.serial_conn.flush()
+                except Exception as e:
+                    print(f"[STM32_BRIDGE] Serial write warning: {e}", flush=True)
+                    self.mcu_connected = False
+
+            return {
+                "led_on": self.led_on,
+                "pwm": self.pwm_value,
+                "pin": "D3 (PWM MOSFET)",
+                "mcu_mode": "HARDWARE_IPC" if self.mcu_connected else "READY_BRIDGE",
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+            }
 
 
 rig_bridge = STM32RigBridge()
@@ -243,9 +309,13 @@ def open_active_webcam(preferred_index: int = 0) -> Tuple[Optional[cv2.VideoCapt
     Qualcomm Snapdragon / Dragonwing QRB2210 often reserves /dev/video0 and /dev/video1
     for internal ISP / VFE hardware pipelines. When a USB webcam is attached (even through a hub),
     Linux assigns it to /dev/video0, /dev/video2, or higher.
-    Tests native camera format first (YUYV/default) before attempting MJPG to ensure broad hardware compatibility.
+    Probes device character nodes directly (/dev/video*), tests native camera format first (YUYV/default),
+    and falls back to MJPG negotiation to ensure broad hardware compatibility.
     """
-    candidate_indices = [preferred_index]
+    # 1. Enforce Qualcomm DWC3 USB controller host mode
+    ensure_usb_host_mode()
+
+    candidate_devices = []
     if os.name != "nt":
         # Scan real /dev/video* devices on Debian ARM64
         video_nodes = sorted(glob.glob("/dev/video*"))
@@ -253,28 +323,43 @@ def open_active_webcam(preferred_index: int = 0) -> Tuple[Optional[cv2.VideoCapt
             suffix = v.replace("/dev/video", "")
             if suffix.isdigit():
                 idx_num = int(suffix)
-                if idx_num not in candidate_indices:
-                    candidate_indices.append(idx_num)
-    for i in range(8):
-        if i not in candidate_indices:
-            candidate_indices.append(i)
+                if (idx_num, v) not in candidate_devices:
+                    candidate_devices.append((idx_num, v))
 
-    print(f"[CAMERA_SCAN] Probing candidate video indices: {candidate_indices}", flush=True)
+        pref_node = f"/dev/video{preferred_index}"
+        if (preferred_index, pref_node) in candidate_devices:
+            candidate_devices.remove((preferred_index, pref_node))
+            candidate_devices.insert(0, (preferred_index, pref_node))
+        elif preferred_index not in [x[0] for x in candidate_devices]:
+            candidate_devices.insert(0, (preferred_index, pref_node))
+    else:
+        candidate_devices.append((preferred_index, preferred_index))
+        for i in range(8):
+            if i != preferred_index:
+                candidate_devices.append((i, i))
+
+    print(
+        f"[CAMERA_SCAN] Probing candidate video targets: {[x[1] for x in candidate_devices]}",
+        flush=True,
+    )
 
     # Retry up to 3 attempts with brief pause to handle V4L2 device availability
     for attempt in range(3):
-        for idx in candidate_indices:
+        for idx_num, dev_target in candidate_devices:
             try:
                 cap = None
                 if os.name == "nt":
-                    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                    cap = cv2.VideoCapture(dev_target, cv2.CAP_DSHOW)
                     if cap is None or not cap.isOpened():
-                        cap = cv2.VideoCapture(idx)
+                        cap = cv2.VideoCapture(dev_target)
                 else:
-                    # Explicitly use V4L2 backend on Linux Debian ARM64
-                    cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+                    # On Linux: try path string first (e.g. "/dev/video0"), then integer index
+                    if isinstance(dev_target, str):
+                        cap = cv2.VideoCapture(dev_target, cv2.CAP_V4L2)
                     if cap is None or not cap.isOpened():
-                        cap = cv2.VideoCapture(idx)
+                        cap = cv2.VideoCapture(idx_num, cv2.CAP_V4L2)
+                    if cap is None or not cap.isOpened():
+                        cap = cv2.VideoCapture(idx_num)
 
                 if cap is None or not cap.isOpened():
                     continue
@@ -291,11 +376,11 @@ def open_active_webcam(preferred_index: int = 0) -> Tuple[Optional[cv2.VideoCapt
                     if ret and test_frame is not None and test_frame.size > 0:
                         frame_ok = True
                         print(
-                            f"[CAMERA_SCAN] SUCCESS: Opened physical camera on video{idx} "
+                            f"[CAMERA_SCAN] SUCCESS: Opened physical camera on {dev_target} "
                             f"(native format, {test_frame.shape[1]}x{test_frame.shape[0]})",
                             flush=True,
                         )
-                        return cap, idx
+                        return cap, idx_num
                     time.sleep(0.04)
 
                 # Test 2: If native read failed, negotiate MJPG compression
@@ -306,16 +391,16 @@ def open_active_webcam(preferred_index: int = 0) -> Tuple[Optional[cv2.VideoCapt
                         if ret and test_frame is not None and test_frame.size > 0:
                             frame_ok = True
                             print(
-                                f"[CAMERA_SCAN] SUCCESS: Opened physical camera on video{idx} "
+                                f"[CAMERA_SCAN] SUCCESS: Opened physical camera on {dev_target} "
                                 f"(MJPG format, {test_frame.shape[1]}x{test_frame.shape[0]})",
                                 flush=True,
                             )
-                            return cap, idx
+                            return cap, idx_num
                         time.sleep(0.04)
 
                 cap.release()
             except Exception as e:
-                print(f"[CAMERA_SCAN] Warning probing video{idx}: {e}", flush=True)
+                print(f"[CAMERA_SCAN] Warning probing {dev_target}: {e}", flush=True)
                 continue
 
         if attempt < 2:
@@ -329,7 +414,7 @@ class CameraWorkerThread(threading.Thread):
     """
     Dedicated worker thread that continuously drains frames from the V4L2 kernel ring buffer.
     Eliminates the 4-frame kernel backlog delay, reducing preview latency from ~1200ms to <40ms.
-    Safely shuts down on stop() without deadlocking V4L2 release.
+    Guarantees thread-safe single-reader access to cv2.VideoCapture.
     """
 
     def __init__(self, cap: cv2.VideoCapture):
@@ -338,6 +423,7 @@ class CameraWorkerThread(threading.Thread):
         self.running = True
         self.latest_frame: Optional[np.ndarray] = None
         self.lock = threading.Lock()
+        self.last_read_success_time = time.time()
 
     def run(self):
         consecutive_errors = 0
@@ -348,14 +434,21 @@ class CameraWorkerThread(threading.Thread):
                 ret, frame = self.cap.read()
                 if ret and frame is not None and frame.size > 0:
                     consecutive_errors = 0
+                    self.last_read_success_time = time.time()
                     with self.lock:
                         self.latest_frame = frame
                 else:
                     consecutive_errors += 1
-                    if consecutive_errors > 40:
+                    try:
+                        self.cap.grab()
+                    except Exception:
+                        pass
+                    if consecutive_errors > 80:  # Allow up to ~1.6s for transient USB glitch recovery
+                        print("[CAMERA_WORKER] Warning: Camera read timeout, worker stopping", flush=True)
                         break
                     time.sleep(0.02)
-            except Exception:
+            except Exception as e:
+                print(f"[CAMERA_WORKER] Exception in read loop: {e}", flush=True)
                 break
 
     def get_frame(self) -> Optional[np.ndarray]:
@@ -372,7 +465,9 @@ class OnDemandWebcamController:
     1. Keeps hardware handle warm between top and bottom surfaces (Daun Atas -> Daun Bawah)
        with 0% CPU when paused, eliminating V4L2 EBUSY lockout and simulated leaf fallback.
     2. Delivers zero-lag MJPEG stream (~20 FPS) via CameraWorkerThread while live.
-    3. Completely releases hardware (release_hardware()) when AI inference executes or session resets.
+    3. Thread-safe single-reader architecture: only CameraWorkerThread reads from cv2.VideoCapture.
+    4. Auto-resizes high-resolution webcam frames to 640x480 to keep CPU load minimal.
+    5. Disconnect detection: automatically pauses camera and turns off LED ring when all client streams disconnect.
     """
 
     def __init__(self, camera_index: int = 0):
@@ -388,6 +483,7 @@ class OnDemandWebcamController:
         self.last_activity_at: float = time.time()
         self.lock = threading.Lock()
         self.max_stream_seconds: float = 90.0  # Auto-pause safety timeout for continuous stream
+        self.active_viewers: int = 0
 
     def start_camera(self, side: str = "top") -> Dict[str, Any]:
         """
@@ -532,24 +628,33 @@ class OnDemandWebcamController:
         hst: int = 16,
         soil_moisture: float = 62.0,
     ) -> np.ndarray:
-        """Read latest instantaneous frame with 0-frame buffer backlog."""
+        """
+        Read latest instantaneous frame with 0-frame buffer backlog.
+        Guarantees thread-safety: does NOT concurrently call cap.read() if worker is alive.
+        """
+        self.last_activity_at = time.time()
+
+        # 1. Primary path: Grab latest frame from dedicated worker thread (0-latency, thread-safe)
+        if self.worker is not None and self.worker.is_alive():
+            live_frame = self.worker.get_frame()
+            if live_frame is not None and live_frame.size > 0:
+                # Downscale to 640x480 if camera outputs higher resolution (720p/1080p) to save CPU/bandwidth
+                if live_frame.shape[1] > 640:
+                    h, w = live_frame.shape[:2]
+                    target_w = 640
+                    target_h = int(h * (640.0 / w))
+                    live_frame = cv2.resize(live_frame, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+                self.last_frame = live_frame.copy()
+                self.last_source_mode = f"USB_WEBCAM_LIVE (video{self.camera_index})"
+                return live_frame
+
+        # 2. Worker revive check: if worker unexpectedly died while cap is still open, revive worker
         with self.lock:
-            self.last_activity_at = time.time()
-            if self.worker is not None:
-                live_frame = self.worker.get_frame()
-                if live_frame is not None and live_frame.size > 0:
-                    self.last_frame = live_frame.copy()
-                    self.last_source_mode = f"USB_WEBCAM_LIVE (video{self.camera_index})"
-                    return live_frame
+            if (self.worker is None or not self.worker.is_alive()) and (self.cap is not None and self.cap.isOpened()):
+                self.worker = CameraWorkerThread(self.cap)
+                self.worker.start()
 
-            if self.cap is not None and self.cap.isOpened():
-                ret, frame = self.cap.read()
-                if ret and frame is not None and frame.size > 0:
-                    self.last_frame = frame.copy()
-                    self.last_source_mode = f"USB_WEBCAM_LIVE (video{self.camera_index})"
-                    return frame
-
-            # If webcam frame exists in self.last_frame (e.g. while worker is starting up), return it
+            # 3. Cached latest frame while worker is starting up
             if (
                 self.last_frame is not None
                 and self.last_frame.size > 0
@@ -557,22 +662,22 @@ class OnDemandWebcamController:
             ):
                 return self.last_frame.copy()
 
-            # Fallback live viewfinder with subtle natural movement only if physical webcam is truly absent
-            t = time.time()
-            shift_x = int(math.sin(t * 2.2) * 5.0)
-            shift_y = int(math.cos(t * 1.7) * 4.0)
-            frame = generate_realistic_kangkung_leaf(
-                side=side,
-                variety=variety,
-                scenario=scenario,
-                hst=hst,
-                soil_moisture=soil_moisture,
-                shift_x=shift_x,
-                shift_y=shift_y,
-            )
-            self.last_frame = frame.copy()
-            self.last_source_mode = f"WEBCAM_VIEWFINDER ({scenario})"
-            return frame
+        # 4. Fallback live viewfinder with subtle natural movement only if physical webcam is truly absent
+        t = time.time()
+        shift_x = int(math.sin(t * 2.2) * 5.0)
+        shift_y = int(math.cos(t * 1.7) * 4.0)
+        frame = generate_realistic_kangkung_leaf(
+            side=side,
+            variety=variety,
+            scenario=scenario,
+            hst=hst,
+            soil_moisture=soil_moisture,
+            shift_x=shift_x,
+            shift_y=shift_y,
+        )
+        self.last_frame = frame.copy()
+        self.last_source_mode = f"WEBCAM_VIEWFINDER ({scenario})"
+        return frame
 
     def stream_mjpeg_generator(
         self,
@@ -584,9 +689,12 @@ class OnDemandWebcamController:
     ) -> Generator[bytes, None, None]:
         """
         Yields multipart MJPEG frames at smooth ~20 FPS while self.is_streaming is True.
-        Automatically pauses when stopped or after 90s timeout.
+        Automatically pauses when stopped, after 90s timeout, or when client disconnects.
         """
         self.start_camera(side=side)
+        with self.lock:
+            self.active_viewers += 1
+
         frame_interval = 0.05  # Snappy 20 FPS preview with zero buffer backlog
 
         try:
@@ -618,7 +726,12 @@ class OnDemandWebcamController:
                 sleep_rem = max(0.01, frame_interval - elapsed)
                 time.sleep(sleep_rem)
         finally:
-            pass
+            # When client closes browser tab / disconnects, decrement active viewers
+            with self.lock:
+                self.active_viewers = max(0, self.active_viewers - 1)
+                if self.active_viewers == 0:
+                    # Auto-pause stream and turn off LED ring so camera never idles hot
+                    self.pause_stream()
 
 
 webcam_controller = OnDemandWebcamController()
@@ -635,8 +748,8 @@ def capture_leaf_surface(
     prefer_simulation: bool = False,
 ) -> Tuple[str, str, Dict[str, Any]]:
     """
-    Captures the current leaf image for 'top' or 'bottom' and IMMEDIATELY stops/releases
-    the live webcam stream so Arduino UNO Q has 0% camera load during validation & AI processing.
+    Captures the current leaf image for 'top' or 'bottom' with zero buffer lag and
+    pauses the stream while keeping hardware warm for the second surface.
     """
     cleanup_old_captures()
     side = "top" if side.lower() not in ("bottom", "bawah", "abaxial") else "bottom"
@@ -658,24 +771,28 @@ def capture_leaf_surface(
 
     # Grab the current real-time frame from active webcam preview
     if frame is None and not prefer_simulation:
-        if webcam_controller.worker is not None:
+        # Priority 1: worker thread latest frame (instantaneous, thread-safe, 0 latency)
+        if webcam_controller.worker is not None and webcam_controller.worker.is_alive():
             live = webcam_controller.worker.get_frame()
             if live is not None and live.size > 0:
                 frame = live.copy()
                 source_mode = webcam_controller.last_source_mode
 
+        # Priority 2: cached last frame
         if frame is None and webcam_controller.last_frame is not None and webcam_controller.last_frame.size > 0:
             frame = webcam_controller.last_frame.copy()
             source_mode = webcam_controller.last_source_mode
 
-        if frame is None and webcam_controller.cap is not None and webcam_controller.cap.isOpened():
-            for _ in range(3):
-                ret, direct_frame = webcam_controller.cap.read()
-                if ret and direct_frame is not None and direct_frame.size > 0:
-                    frame = direct_frame.copy()
-                    source_mode = f"USB_WEBCAM_LIVE (video{webcam_controller.camera_index})"
-                    break
-                time.sleep(0.02)
+        # Priority 3: direct read only if worker is NOT running
+        if frame is None and (webcam_controller.worker is None or not webcam_controller.worker.is_alive()):
+            if webcam_controller.cap is not None and webcam_controller.cap.isOpened():
+                for _ in range(5):
+                    ret, direct_frame = webcam_controller.cap.read()
+                    if ret and direct_frame is not None and direct_frame.size > 0:
+                        frame = direct_frame.copy()
+                        source_mode = f"USB_WEBCAM_LIVE (video{webcam_controller.camera_index})"
+                        break
+                    time.sleep(0.03)
 
         # Pause stream and turn off LED ring, but KEEP cv2.VideoCapture handle warm!
         # This guarantees transitioning to Daun Bawah (or retrying Daun Atas) never hits V4L2 EBUSY.
