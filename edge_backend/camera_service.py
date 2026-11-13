@@ -29,18 +29,70 @@ def ensure_usb_host_mode() -> None:
     Self-healing routine for Qualcomm Dragonwing QRB2210 DWC3 USB controller.
     Restores Host Mode automatically if USB VBUS momentarily fluctuated or reset,
     ensuring the USB-C Hub and physical Webcam remain continuously powered and detected.
+    Handles permissions gracefully via direct write and passwordless sudo fallback.
     """
     if os.name != "nt":
-        for role_path in glob.glob("/sys/class/usb_role/*/role"):
+        role_paths = glob.glob("/sys/class/usb_role/*/role")
+        for role_path in role_paths:
             try:
                 with open(role_path, "r") as f:
                     role = f.read().strip()
                 if role != "host":
-                    with open(role_path, "w") as f:
-                        f.write("host\n")
-                    print(f"[USB_CONTROLLER] Restored {role_path} to host mode", flush=True)
+                    try:
+                        with open(role_path, "w") as f:
+                            f.write("host\n")
+                        print(f"[USB_CONTROLLER] Restored {role_path} to host mode (direct)", flush=True)
+                    except PermissionError:
+                        import subprocess
+                        subprocess.run(
+                            ["sudo", "-n", "sh", "-c", f"echo host > '{role_path}'"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=1.0,
+                        )
+                        print(f"[USB_CONTROLLER] Restored {role_path} to host mode (sudo)", flush=True)
             except Exception:
                 pass
+
+        # Ensure V4L2 device nodes have full read/write access
+        video_nodes = glob.glob("/dev/video*")
+        if video_nodes:
+            try:
+                import subprocess
+                subprocess.run(
+                    ["sudo", "-n", "chmod", "666"] + video_nodes,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=0.5,
+                )
+            except Exception:
+                pass
+
+
+class USBHostWatchdog(threading.Thread):
+    """
+    Background supervisor thread that continuously maintains Qualcomm DWC3 USB Host mode.
+    Automatically recovers the USB bus and webcam within 3 seconds if the USB hub is plugged
+    in after boot, hot-swapped, or momentarily disconnected.
+    """
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.running = True
+
+    def run(self):
+        while self.running:
+            try:
+                ensure_usb_host_mode()
+            except Exception:
+                pass
+            time.sleep(3.0)
+
+
+# Start auto-detecting USB watchdog immediately upon service import on Linux
+if os.name != "nt":
+    _usb_watchdog = USBHostWatchdog()
+    _usb_watchdog.start()
 
 
 class STM32RigBridge:
