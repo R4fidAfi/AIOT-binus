@@ -355,108 +355,132 @@ def generate_realistic_kangkung_leaf(
     return img
 
 
+def is_usb_uvc_device(idx_num: int) -> bool:
+    """
+    Verifies if /dev/videoX belongs to a physical USB UVC webcam.
+    Skips internal Qualcomm QRB2210 CAMSS / VFE ISP pipeline nodes that cause ioctl hangs.
+    """
+    sys_path = f"/sys/class/video4linux/video{idx_num}"
+    if not os.path.exists(sys_path):
+        return True
+    try:
+        name_path = os.path.join(sys_path, "name")
+        if os.path.exists(name_path):
+            with open(name_path, "r") as f:
+                name = f.read().lower()
+            if any(k in name for k in ("qcom", "camss", "vfe", "titan", "msm")):
+                return False
+            if any(k in name for k in ("cam", "webcam", "uvc", "usb", "logitech", "rexus")):
+                return True
+        driver_link = os.path.realpath(os.path.join(sys_path, "device", "driver"))
+        if "uvcvideo" in driver_link.lower():
+            return True
+    except Exception:
+        pass
+    return True
+
+
 def open_active_webcam(preferred_index: int = 0) -> Tuple[Optional[cv2.VideoCapture], int]:
     """
     Auto-detects and opens the physical USB webcam on Linux (Arduino UNO Q) or Windows.
-    Qualcomm Snapdragon / Dragonwing QRB2210 often reserves /dev/video0 and /dev/video1
-    for internal ISP / VFE hardware pipelines. When a USB webcam is attached (even through a hub),
-    Linux assigns it to /dev/video0, /dev/video2, or higher.
-    Probes device character nodes directly (/dev/video*), tests native camera format first (YUYV/default),
-    and falls back to MJPG negotiation to ensure broad hardware compatibility.
+    Prioritizes real UVC USB devices, avoiding internal Qualcomm ISP hardware pipelines that hang.
+    Configures buffer size = 1 to prevent kernel V4L2 queue stalls.
     """
     # 1. Enforce Qualcomm DWC3 USB controller host mode
     ensure_usb_host_mode()
 
-    candidate_devices = []
+    candidate_devices: List[int] = []
     if os.name != "nt":
-        # Scan real /dev/video* devices on Debian ARM64
         video_nodes = sorted(glob.glob("/dev/video*"))
+        uvc_targets: List[int] = []
+        other_targets: List[int] = []
         for v in video_nodes:
             suffix = v.replace("/dev/video", "")
             if suffix.isdigit():
                 idx_num = int(suffix)
-                if (idx_num, v) not in candidate_devices:
-                    candidate_devices.append((idx_num, v))
-
-        pref_node = f"/dev/video{preferred_index}"
-        if (preferred_index, pref_node) in candidate_devices:
-            candidate_devices.remove((preferred_index, pref_node))
-            candidate_devices.insert(0, (preferred_index, pref_node))
-        elif preferred_index not in [x[0] for x in candidate_devices]:
-            candidate_devices.insert(0, (preferred_index, pref_node))
+                if is_usb_uvc_device(idx_num):
+                    uvc_targets.append(idx_num)
+                else:
+                    other_targets.append(idx_num)
+        # Prioritize confirmed UVC USB webcams first
+        candidate_devices = uvc_targets + other_targets
+        if preferred_index in candidate_devices:
+            candidate_devices.sort(key=lambda x: 0 if x == preferred_index else 1)
+        elif not candidate_devices:
+            candidate_devices = [preferred_index]
     else:
-        candidate_devices.append((preferred_index, preferred_index))
-        for i in range(8):
-            if i != preferred_index:
-                candidate_devices.append((i, i))
+        candidate_devices = [preferred_index] + [i for i in range(4) if i != preferred_index]
 
     print(
-        f"[CAMERA_SCAN] Probing candidate video targets: {[x[1] for x in candidate_devices]}",
+        f"[CAMERA_SCAN] Probing candidate video targets: {[f'/dev/video{i}' for i in candidate_devices]}",
         flush=True,
     )
 
-    # Retry up to 3 attempts with brief pause to handle V4L2 device availability
-    for attempt in range(3):
-        for idx_num, dev_target in candidate_devices:
-            try:
-                cap = None
-                if os.name == "nt":
-                    cap = cv2.VideoCapture(dev_target, cv2.CAP_DSHOW)
-                    if cap is None or not cap.isOpened():
-                        cap = cv2.VideoCapture(dev_target)
-                else:
-                    # On Linux: try path string first (e.g. "/dev/video0"), then integer index
-                    if isinstance(dev_target, str):
-                        cap = cv2.VideoCapture(dev_target, cv2.CAP_V4L2)
-                    if cap is None or not cap.isOpened():
-                        cap = cv2.VideoCapture(idx_num, cv2.CAP_V4L2)
-                    if cap is None or not cap.isOpened():
-                        cap = cv2.VideoCapture(idx_num)
-
+    for idx_num in candidate_devices:
+        cap = None
+        try:
+            if os.name == "nt":
+                cap = cv2.VideoCapture(idx_num, cv2.CAP_DSHOW)
                 if cap is None or not cap.isOpened():
-                    continue
+                    if cap is not None:
+                        cap.release()
+                    cap = cv2.VideoCapture(idx_num)
+            else:
+                cap = cv2.VideoCapture(idx_num, cv2.CAP_V4L2)
+                if cap is None or not cap.isOpened():
+                    if cap is not None:
+                        cap.release()
+                    cap = cv2.VideoCapture(idx_num)
 
-                # Configure standard 640x480 @ 20 FPS
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                cap.set(cv2.CAP_PROP_FPS, 20)
+            if cap is None or not cap.isOpened():
+                if cap is not None:
+                    cap.release()
+                continue
 
-                # Test 1: Native format read with sensor warm-up (up to 5 reads)
-                frame_ok = False
-                for _ in range(5):
+            # Standard 640x480 @ 20 FPS with minimal kernel buffer
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            cap.set(cv2.CAP_PROP_FPS, 20)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+            # Test 1: Native format read with quick warm-up (up to 3 reads)
+            frame_ok = False
+            for _ in range(3):
+                ret, test_frame = cap.read()
+                if ret and test_frame is not None and test_frame.size > 0:
+                    frame_ok = True
+                    print(
+                        f"[CAMERA_SCAN] SUCCESS: Opened physical camera on /dev/video{idx_num} "
+                        f"(native format, {test_frame.shape[1]}x{test_frame.shape[0]})",
+                        flush=True,
+                    )
+                    return cap, idx_num
+                time.sleep(0.02)
+
+            # Test 2: If native read failed, negotiate MJPG compression
+            if not frame_ok:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                for _ in range(3):
                     ret, test_frame = cap.read()
                     if ret and test_frame is not None and test_frame.size > 0:
                         frame_ok = True
                         print(
-                            f"[CAMERA_SCAN] SUCCESS: Opened physical camera on {dev_target} "
-                            f"(native format, {test_frame.shape[1]}x{test_frame.shape[0]})",
+                            f"[CAMERA_SCAN] SUCCESS: Opened physical camera on /dev/video{idx_num} "
+                            f"(MJPG format, {test_frame.shape[1]}x{test_frame.shape[0]})",
                             flush=True,
                         )
                         return cap, idx_num
-                    time.sleep(0.04)
+                    time.sleep(0.02)
 
-                # Test 2: If native read failed, negotiate MJPG compression
-                if not frame_ok:
-                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                    for _ in range(5):
-                        ret, test_frame = cap.read()
-                        if ret and test_frame is not None and test_frame.size > 0:
-                            frame_ok = True
-                            print(
-                                f"[CAMERA_SCAN] SUCCESS: Opened physical camera on {dev_target} "
-                                f"(MJPG format, {test_frame.shape[1]}x{test_frame.shape[0]})",
-                                flush=True,
-                            )
-                            return cap, idx_num
-                        time.sleep(0.04)
-
-                cap.release()
-            except Exception as e:
-                print(f"[CAMERA_SCAN] Warning probing {dev_target}: {e}", flush=True)
-                continue
-
-        if attempt < 2:
-            time.sleep(0.2)
+            cap.release()
+        except Exception as e:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            print(f"[CAMERA_SCAN] Warning probing /dev/video{idx_num}: {e}", flush=True)
+            continue
 
     print("[CAMERA_SCAN] NOTICE: No active physical webcam responded. Using live viewfinder.", flush=True)
     return None, preferred_index
@@ -533,7 +557,7 @@ class OnDemandWebcamController:
         self.last_source_mode: str = "STANDBY"
         self.stream_started_at: float = 0.0
         self.last_activity_at: float = time.time()
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.max_stream_seconds: float = 90.0  # Auto-pause safety timeout for continuous stream
         self.active_viewers: int = 0
 
@@ -541,11 +565,30 @@ class OnDemandWebcamController:
         """
         Turn ON LED Ring and open USB Webcam cleanly.
         Ensures hardware indicator turns ON, V4L2 queue is brand new, and live preview starts immediately.
+        Idempotent: If camera is already actively running, avoids redundant hardware teardowns.
         """
         with self.lock:
             self.active_side = "top" if side.lower() not in ("bottom", "bawah") else "bottom"
             self.stream_started_at = time.time()
             self.last_activity_at = time.time()
+
+            # 1. Idempotent check: If already streaming with alive worker and open cap, DO NOT reopen!
+            if (
+                self.is_streaming
+                and self.cap is not None
+                and self.cap.isOpened()
+                and self.worker is not None
+                and self.worker.is_alive()
+            ):
+                rig_bridge.set_led_ring(True, pwm=225)
+                return {
+                    "is_streaming": True,
+                    "side": self.active_side,
+                    "source_mode": self.last_source_mode,
+                    "fps_limit": 20,
+                    "resolution": "640x480",
+                    "led_ring_on": rig_bridge.led_on,
+                }
 
             # Ensure any leftover worker or cap is cleanly shut down first
             if self.worker is not None:
@@ -751,11 +794,13 @@ class OnDemandWebcamController:
                 time.sleep(sleep_rem)
         finally:
             # When client closes browser tab / disconnects, decrement active viewers
+            should_stop = False
             with self.lock:
                 self.active_viewers = max(0, self.active_viewers - 1)
                 if self.active_viewers == 0:
-                    # Auto-pause stream and turn off LED ring so camera never idles hot
-                    self.pause_stream()
+                    should_stop = True
+            if should_stop:
+                self.release_hardware()
 
 
 webcam_controller = OnDemandWebcamController()

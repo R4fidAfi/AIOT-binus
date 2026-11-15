@@ -1021,62 +1021,7 @@ async function loadTelemetryAndChart() {
     const soils = history.map((r) => Number(r.soil_moisture || 0));
     const barColors = soils.map((val) => (val < 35.0 ? '#f59e0b' : '#15803d'));
 
-    const ctx = document.getElementById('telemetryChart');
-    if (ctx) {
-      if (APP_STATE.telemetryChartInstance) {
-        APP_STATE.telemetryChartInstance.destroy();
-      }
-      APP_STATE.telemetryChartInstance = new Chart(ctx, {
-        type: 'bar',
-        data: {
-          labels,
-          datasets: [
-            {
-              label: 'Lembab Tanah (%)',
-              data: soils,
-              backgroundColor: barColors,
-              borderRadius: 4,
-              maxBarThickness: 28,
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              callbacks: {
-                label: (item) => {
-                  const idx = item.dataIndex;
-                  const row = history[idx] || {};
-                  const statusTxt = item.raw < 35 ? 'Kering (Perlu Siram)' : 'Cukup Air (Aman)';
-                  return `Lembab Tanah: ${item.raw}% — ${statusTxt} | Suhu: ${row.temperature || '--'}°C`;
-                },
-              },
-            },
-          },
-          scales: {
-            x: {
-              ticks: { color: '#64748b', font: { size: 10 } },
-              grid: { display: false },
-            },
-            y: {
-              min: 0,
-              max: 100,
-              ticks: {
-                color: '#64748b',
-                font: { size: 10 },
-                stepSize: 25,
-                callback: (v) => v + '%',
-              },
-              grid: { color: '#f1f5f9' },
-            },
-          },
-        },
-      });
-    }
-
+    // 1. Tampilkan Catatan Pembacaan Ringkas 5 Waktu Terakhir (Selalu dieksekusi pertama)
     const simpleList = document.getElementById('telemetrySimpleList');
     if (simpleList) {
       simpleList.innerHTML = '';
@@ -1101,11 +1046,11 @@ async function loadTelemetryAndChart() {
       });
     }
 
-    // Mengisi Tabel Riwayat Lengkap Nilai Sensor ESP32
+    // 2. Mengisi Tabel Riwayat Lengkap Nilai Sensor ESP32 (Kebal terhadap kegagalan CDN Chart)
     const tableBody = document.getElementById('telemetryHistoryTableBody');
     if (tableBody) {
       if (!history || history.length === 0) {
-        tableBody.innerHTML = '<tr><td colspan="6" class="py-3 px-3 text-center text-slate-400">Belum ada data sensor tercatat.</td></tr>';
+        tableBody.innerHTML = '<tr><td colspan="6" class="py-3 px-3 text-center text-slate-400">Belum ada data sensor tercatat di database.</td></tr>';
       } else {
         tableBody.innerHTML = '';
         const recentRows = history.slice(-20).reverse();
@@ -1129,6 +1074,69 @@ async function loadTelemetryAndChart() {
           tableBody.appendChild(tr);
         });
       }
+    }
+
+    // 3. Render Grafik Batang (Diproteksi dalam blok aman jika CDN Chart.js offline/terputus)
+    try {
+      if (typeof Chart !== 'undefined') {
+        const ctx = document.getElementById('telemetryChart');
+        if (ctx) {
+          if (APP_STATE.telemetryChartInstance) {
+            APP_STATE.telemetryChartInstance.destroy();
+          }
+          APP_STATE.telemetryChartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels,
+              datasets: [
+                {
+                  label: 'Lembab Tanah (%)',
+                  data: soils,
+                  backgroundColor: barColors,
+                  borderRadius: 4,
+                  maxBarThickness: 28,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  callbacks: {
+                    label: (item) => {
+                      const idx = item.dataIndex;
+                      const row = history[idx] || {};
+                      const statusTxt = item.raw < 35 ? 'Kering (Perlu Siram)' : 'Cukup Air (Aman)';
+                      return `Lembab Tanah: ${item.raw}% — ${statusTxt} | Suhu: ${row.temperature || '--'}°C`;
+                    },
+                  },
+                },
+              },
+              scales: {
+                x: {
+                  ticks: { color: '#64748b', font: { size: 10 } },
+                  grid: { display: false },
+                },
+                y: {
+                  min: 0,
+                  max: 100,
+                  ticks: {
+                    color: '#64748b',
+                    font: { size: 10 },
+                    stepSize: 25,
+                    callback: (v) => v + '%',
+                  },
+                  grid: { color: '#f1f5f9' },
+                },
+              },
+            },
+          });
+        }
+      }
+    } catch (chartErr) {
+      console.warn('Chart.js render deferred or unavailable:', chartErr);
     }
   } catch (err) {
     console.error('Error loading telemetry chart:', err);
@@ -1338,8 +1346,14 @@ window.addEventListener('DOMContentLoaded', async () => {
   APP_STATE.capturePhase = 'TOP_STANDBY';
   renderSingleCameraUI();
 
+  // Pra-muat data sensor di latar belakang agar tabel langsung terisi saat tab dibuka
+  loadTelemetryAndChart();
+
   // Sinkronisasi Real-Time otomatis setiap 5 detik dari sensor ESP32
   setInterval(() => {
     loadStatusAndHeader();
+    if (APP_STATE.activeTab === 'tab-land') {
+      loadTelemetryAndChart();
+    }
   }, 5000);
 });
