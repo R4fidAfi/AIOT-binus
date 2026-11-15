@@ -39,6 +39,74 @@ function hideToast() {
   if (banner) banner.classList.add('hidden');
 }
 
+/* ================= REAL-TIME CLOCK: KOTA TANGERANG (WIB / UTC+7) ================= */
+function updateTangerangLiveClock() {
+  const now = new Date();
+  try {
+    const dateOptions = {
+      timeZone: 'Asia/Jakarta',
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    };
+    const timeOptions = {
+      timeZone: 'Asia/Jakarta',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    };
+
+    const dateStr = new Intl.DateTimeFormat('id-ID', dateOptions).format(now);
+    let timeStr = new Intl.DateTimeFormat('id-ID', timeOptions).format(now);
+    timeStr = timeStr.replace(/\./g, ':');
+
+    const dateEl = document.getElementById('liveClockDate');
+    const timeEl = document.getElementById('liveClockTime');
+    if (dateEl) dateEl.textContent = dateStr;
+    if (timeEl) timeEl.textContent = timeStr;
+  } catch (err) {
+    const dateEl = document.getElementById('liveClockDate');
+    const timeEl = document.getElementById('liveClockTime');
+    if (dateEl) dateEl.textContent = now.toLocaleDateString('id-ID');
+    if (timeEl) timeEl.textContent = now.toLocaleTimeString('id-ID');
+  }
+}
+
+function formatWibTimestamp(tsStr) {
+  if (!tsStr) return '-';
+  try {
+    const clean = String(tsStr).trim();
+    const parts = clean.split(' ');
+    if (parts.length === 2) {
+      const dateParts = parts[0].split('-');
+      const timePart = parts[1];
+      if (dateParts.length === 3) {
+        const year = dateParts[0];
+        const monthIdx = parseInt(dateParts[1], 10);
+        const day = dateParts[2];
+        const months = [
+          '', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+          'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+        ];
+        const monthName = months[monthIdx] || dateParts[1];
+        return `${day} ${monthName} ${year}, ${timePart} WIB`;
+      }
+    }
+    return `${clean} WIB`;
+  } catch (err) {
+    return `${tsStr} WIB`;
+  }
+}
+
+function formatWibTimeOnly(tsStr) {
+  if (!tsStr) return '--:--:--';
+  const clean = String(tsStr).trim();
+  const parts = clean.split(' ');
+  return parts.length === 2 ? parts[1] : clean.slice(-8);
+}
+
 /* ================= NAVIGATION TABS ================= */
 function switchTab(tabId) {
   // Jika user pindah menu saat kamera live menyala, matikan kamera otomatis agar UNO Q hemat RAM/CPU
@@ -138,8 +206,8 @@ function renderHeaderAndSettings(data) {
 
   const sensorTimeEl = document.getElementById('barSensorTime');
   if (sensorTimeEl) {
-    const timePart = (tel.timestamp || data.server_time || '').slice(11, 19);
-    sensorTimeEl.textContent = timePart ? `Update ${timePart}` : 'Live • ESP32';
+    const rawTime = (tel.timestamp || data.server_time || '');
+    sensorTimeEl.textContent = rawTime ? `Update Sensor: ${formatWibTimeOnly(rawTime)} WIB` : 'Live • ESP32';
   }
 
   // 1. Suhu Udara
@@ -1032,7 +1100,7 @@ async function loadTelemetryAndChart() {
         const rowEl = document.createElement('div');
         rowEl.className = 'flex items-center justify-between px-3 py-2';
         rowEl.innerHTML = `
-          <div class="font-mono-num font-semibold text-slate-700">Pukul ${(r.timestamp || '').slice(11, 16)}</div>
+          <div class="font-mono-num font-semibold text-slate-700">${formatWibTimestamp(r.timestamp)}</div>
           <div class="flex items-center gap-3">
             <span class="text-slate-600">Suhu <strong class="font-mono-num text-slate-900">${Number(r.temperature).toFixed(1)}°C</strong></span>
             <span class="px-2 py-0.5 rounded text-[11px] font-semibold ${
@@ -1060,7 +1128,7 @@ async function loadTelemetryAndChart() {
           const tr = document.createElement('tr');
           tr.className = 'hover:bg-slate-50 transition-colors';
           tr.innerHTML = `
-            <td class="py-2 px-3 font-mono-num text-slate-600 whitespace-nowrap">${r.timestamp || '-'}</td>
+            <td class="py-2 px-3 font-mono-num text-slate-700 whitespace-nowrap font-medium">${formatWibTimestamp(r.timestamp)}</td>
             <td class="py-2 px-3 font-mono-num font-semibold text-slate-800">${Number(r.temperature || 0).toFixed(1)} °C</td>
             <td class="py-2 px-3 font-mono-num text-slate-700">${Number(r.humidity || 0).toFixed(1)} %</td>
             <td class="py-2 px-3 font-mono-num font-semibold ${isDry ? 'text-amber-800' : 'text-emerald-800'}">${sVal.toFixed(1)} %</td>
@@ -1252,7 +1320,7 @@ async function loadInspectionHistory() {
               <span class="text-xs font-bold text-slate-900">${rec.decision_title}</span>
             </div>
             <div class="text-[11px] text-slate-500 mt-0.5">
-              Waktu: <span class="font-mono-num">${rec.timestamp}</span> • <strong>Umur ${rec.hst} Hari</strong> • Lembab Tanah ${Number(rec.soil_moisture).toFixed(0)}%
+              Waktu: <span class="font-mono-num font-medium text-slate-700">${formatWibTimestamp(rec.timestamp)}</span> • <strong>Umur ${rec.hst} Hari</strong> • Lembab Tanah ${Number(rec.soil_moisture).toFixed(0)}%
             </div>
           </div>
           <div class="text-right shrink-0">
@@ -1342,14 +1410,19 @@ async function testLedRing(state) {
 
 /* ================= INITIALIZE ON PAGE LOAD ================= */
 window.addEventListener('DOMContentLoaded', async () => {
+  // 1. Mulai jam real-time Kota Tangerang (WIB / UTC+7) berdetak setiap detik
+  updateTangerangLiveClock();
+  setInterval(updateTangerangLiveClock, 1000);
+
+  // 2. Muat status kebun & header
   await loadStatusAndHeader();
   APP_STATE.capturePhase = 'TOP_STANDBY';
   renderSingleCameraUI();
 
-  // Pra-muat data sensor di latar belakang agar tabel langsung terisi saat tab dibuka
+  // 3. Pra-muat data sensor di latar belakang agar tabel langsung terisi saat tab dibuka
   loadTelemetryAndChart();
 
-  // Sinkronisasi Real-Time otomatis setiap 5 detik dari sensor ESP32
+  // 4. Sinkronisasi Real-Time otomatis setiap 5 detik dari sensor ESP32
   setInterval(() => {
     loadStatusAndHeader();
     if (APP_STATE.activeTab === 'tab-land') {

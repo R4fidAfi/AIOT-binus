@@ -62,6 +62,22 @@
         </div>
       </div>
 
+      <!-- Real-Time Tangerang Clock Bar (WIB / UTC+7) -->
+      <div class="mt-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700/80 flex flex-wrap items-center justify-between gap-2 text-xs text-white shadow-sm">
+        <div class="flex items-center gap-2">
+          <span class="relative flex h-2 w-2">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+          <span class="text-[11px] font-semibold tracking-wide text-emerald-400">Kota Tangerang:</span>
+          <span id="liveClockDate" class="text-[11px] font-medium text-slate-200">Minggu, 15 November 2026</span>
+        </div>
+        <div class="flex items-center gap-1.5 font-mono-num">
+          <span id="liveClockTime" class="font-bold text-sm tracking-wider text-white">20:07:20</span>
+          <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-900 text-emerald-300 border border-emerald-700/60">WIB</span>
+        </div>
+      </div>
+
       <!-- Dedicated Real-Time Field Sensor Monitor Strip -->
       <div class="realtime-strip px-2.5 py-2 mt-2 space-y-1.5">
         <div class="flex items-center justify-between text-[10px] px-0.5">
@@ -713,7 +729,7 @@
           <table class="w-full text-left border-collapse text-xs">
             <thead class="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
               <tr>
-                <th class="py-2 px-3">Waktu</th>
+                <th class="py-2 px-3">Waktu (Kota Tangerang / WIB)</th>
                 <th class="py-2 px-3">Suhu Udara</th>
                 <th class="py-2 px-3">Lembab Udara</th>
                 <th class="py-2 px-3">Lembab Tanah</th>

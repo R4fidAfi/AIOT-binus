@@ -6,8 +6,22 @@ Designed for lightweight operation on Arduino UNO Q (Qualcomm Dragonwing QRB2210
 import json
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+
+# Timezone Western Indonesia Time (WIB / UTC+7 - Kota Tangerang, Banten)
+WIB_TZ = timezone(timedelta(hours=7))
+
+
+def get_wib_now() -> datetime:
+    """Returns current datetime explicitly in Western Indonesia Time (WIB / UTC+7)."""
+    return datetime.now(timezone.utc).astimezone(WIB_TZ)
+
+
+def get_wib_now_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """Returns formatted string of current WIB timestamp."""
+    return get_wib_now().strftime(fmt)
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "edge_kangkung.db")
@@ -266,7 +280,7 @@ def insert_telemetry(
     node_id: str = "ESP32-FIELD-01",
     post_rain_heat_spike: int = 0,
 ) -> Dict[str, Any]:
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = get_wib_now_str()
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -324,7 +338,7 @@ def get_latest_telemetry() -> Dict[str, Any]:
         return dict(row)
     return {
         "id": 0,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": get_wib_now_str(),
         "temperature": 28.8,
         "humidity": 73.2,
         "soil_moisture": 62.4,
@@ -345,7 +359,7 @@ def get_telemetry_history(limit: int = 30) -> List[Dict[str, Any]]:
 
 
 def get_recent_telemetry_window(hours: int = 6) -> List[Dict[str, Any]]:
-    cutoff = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = (get_wib_now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -377,7 +391,7 @@ def insert_inspection(record: Dict[str, Any]) -> int:
         )
         """,
         (
-            record.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            record.get("timestamp", get_wib_now_str()),
             int(record["hst"]),
             record["variety"],
             record["img_top_orig"],

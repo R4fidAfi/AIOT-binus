@@ -27,6 +27,7 @@ from .database import (
     get_latest_telemetry,
     get_recent_telemetry_window,
     get_telemetry_history,
+    get_wib_now_str,
     init_db,
     insert_inspection,
     insert_telemetry,
@@ -261,7 +262,8 @@ def api_get_status() -> Dict[str, Any]:
 
     return {
         "status": "OK",
-        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "server_time": get_wib_now_str(),
+        "timezone": "WIB (UTC+7, Kota Tangerang)",
         "farm": settings,
         "hst_info": hst_info,
         "telemetry": telemetry,
@@ -437,7 +439,7 @@ async def api_capture_leaf_side(
         CURRENT_SESSION["bottom_url"] = url_path
         CURRENT_SESSION["bottom_meta"] = meta
 
-    CURRENT_SESSION["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    CURRENT_SESSION["last_updated"] = get_wib_now_str()
 
     return {
         "status": "CAPTURED",
