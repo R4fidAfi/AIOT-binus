@@ -1311,24 +1311,60 @@ async function loadInspectionHistory() {
       });
     }
 
-    // 3. Kartu Arsip Pemeriksaan Ringkas (Hanya 2 Foto Hasil Deteksi: Atas & Bawah)
+    // 3. Kartu Arsip Pemeriksaan Ringkas & Manajemen Memori UNO Q
+    const countBadge = document.getElementById('historyRecordCountBadge');
+    if (countBadge) countBadge.textContent = `${records.length} Pemeriksaan`;
+
+    APP_STATE.historyRecords = records;
+
     const gallery = document.getElementById('historyGalleryList');
     if (!gallery) return;
     gallery.innerHTML = '';
+
+    if (records.length === 0) {
+      gallery.innerHTML = `
+        <div class="p-6 text-center bg-slate-50 border border-slate-200 rounded-lg text-slate-500 text-xs">
+          Belum ada riwayat pemeriksaan tersimpan. Silakan lakukan inspeksi daun ganda pada menu <strong>Inspeksi</strong>.
+        </div>
+      `;
+      return;
+    }
 
     records.forEach((rec) => {
       const level = rec.decision_level || 'SAFE';
       const card = document.createElement('div');
       card.className = `decision-banner decision-${level} p-3.5 space-y-2.5`;
 
+      // Badge status validasi
+      let valBadgeHtml = '<span class="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200">Belum Divalidasi</span>';
+      if (rec.validation_status === 'VALIDATED_ACCURATE') {
+        valBadgeHtml = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">Tervalidasi (Akurat)</span>';
+      } else if (rec.validation_status === 'VALIDATED_ADJUSTED') {
+        valBadgeHtml = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-300">Tervalidasi (Disesuaikan)</span>';
+      } else if (rec.validation_status === 'REJECTED_FALSE_POSITIVE') {
+        valBadgeHtml = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">Ditolak (False Positive)</span>';
+      }
+
+      // Catatan validasi jika ada
+      let noteHtml = '';
+      if (rec.validation_notes) {
+        noteHtml = `
+          <div class="p-2 rounded bg-white/80 border border-emerald-200 text-[11px] text-slate-700 leading-relaxed">
+            <span class="font-bold text-emerald-800">Catatan Validasi (${rec.validated_at ? formatWibTimestamp(rec.validated_at) : 'Tervalidasi'}):</span> ${rec.validation_notes}
+          </div>
+        `;
+      }
+
       card.innerHTML = `
         <div class="flex items-start justify-between gap-2 border-b border-slate-100 pb-2">
           <div>
             <div class="flex flex-wrap items-center gap-1.5">
+              <span class="font-mono-num text-[10px] font-bold text-slate-500 bg-slate-100 px-1 py-0.5 rounded">#${rec.id}</span>
               <span class="status-pill-${level} px-1.5 py-0.5 rounded text-[10px] font-bold uppercase">${rec.decision_code}</span>
               <span class="text-xs font-bold text-slate-900">${rec.decision_title}</span>
+              ${valBadgeHtml}
             </div>
-            <div class="text-[11px] text-slate-500 mt-0.5">
+            <div class="text-[11px] text-slate-500 mt-1">
               Waktu: <span class="font-mono-num font-medium text-slate-700">${formatWibTimestamp(rec.timestamp)}</span> • <strong>Umur ${rec.hst} Hari</strong> • Lembab Tanah ${Number(rec.soil_moisture).toFixed(0)}%
             </div>
           </div>
@@ -1341,22 +1377,251 @@ async function loadInspectionHistory() {
         <div class="grid grid-cols-2 gap-2.5">
           <div>
             <div class="text-[10px] text-slate-600 font-medium mb-1">1. Daun Atas (${Number(rec.severity_top).toFixed(1)}%)</div>
-            <img src="${rec.img_top_mask}" class="w-full h-24 object-cover rounded border border-slate-200" loading="lazy" />
+            <img src="${rec.img_top_mask}" class="w-full h-24 object-cover rounded border border-slate-200 cursor-pointer hover:opacity-90 transition" loading="lazy" onclick="openInspectionDetailModal(${rec.id})" title="Klik untuk cek visual detail & validasi" />
           </div>
           <div>
             <div class="text-[10px] text-slate-600 font-medium mb-1">2. Daun Bawah (${Number(rec.severity_bottom).toFixed(1)}%)</div>
-            <img src="${rec.img_bottom_mask}" class="w-full h-24 object-cover rounded border border-slate-200" loading="lazy" />
+            <img src="${rec.img_bottom_mask}" class="w-full h-24 object-cover rounded border border-slate-200 cursor-pointer hover:opacity-90 transition" loading="lazy" onclick="openInspectionDetailModal(${rec.id})" title="Klik untuk cek visual detail & validasi" />
           </div>
         </div>
 
         <div class="bg-slate-50 p-2.5 rounded border border-slate-200/80 text-xs text-slate-700 leading-relaxed">
           <strong>Solusi:</strong> ${rec.recommendation}
         </div>
+
+        ${noteHtml}
+
+        <!-- Tombol Aksi Riwayat: Cek/Validasi & Hapus -->
+        <div class="flex items-center justify-between gap-2 pt-1 border-t border-slate-100/80">
+          <button onclick="confirmDeleteInspection(${rec.id})"
+            class="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-700 text-xs font-semibold flex items-center gap-1 transition"
+            title="Hapus riwayat dan file foto untuk menghemat memori Arduino UNO Q">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            <span>Hapus Foto &amp; Data</span>
+          </button>
+
+          <button onclick="openInspectionDetailModal(${rec.id})"
+            class="px-3 py-1.5 rounded-lg bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-semibold flex items-center gap-1 transition shadow-xs">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+            <span>Cek &amp; Validasi</span>
+          </button>
+        </div>
       `;
       gallery.appendChild(card);
     });
   } catch (err) {
     console.error('History load error:', err);
+  }
+}
+
+/* ================= INSPECTION VALIDATION & DETAIL MODAL CONTROLLER ================= */
+async function openInspectionDetailModal(inspectionId) {
+  let rec = null;
+  if (APP_STATE.historyRecords && APP_STATE.historyRecords.length > 0) {
+    rec = APP_STATE.historyRecords.find((r) => r.id === inspectionId);
+  }
+
+  // Jika belum ada di memori, ambil langsung dari REST API
+  if (!rec) {
+    try {
+      const res = await fetch(`/api/v1/history/${inspectionId}`);
+      if (res.ok) {
+        rec = await res.json();
+      }
+    } catch (err) {
+      console.error('Failed to fetch inspection detail:', err);
+    }
+  }
+
+  if (!rec) {
+    showToast('Data pemeriksaan tidak ditemukan');
+    return;
+  }
+
+  APP_STATE.activeInspectionDetail = rec;
+
+  const modal = document.getElementById('inspectionValidationModal');
+  const inputId = document.getElementById('valInputInspectionId');
+  const badgeId = document.getElementById('valModalIdBadge');
+  const subTitle = document.getElementById('valModalSubtitle');
+  const codeBadge = document.getElementById('valModalCodeBadge');
+  const titleEl = document.getElementById('valModalTitle');
+  const sevFinalEl = document.getElementById('valModalSeverityFinal');
+  const recEl = document.getElementById('valModalRecommendation');
+
+  if (inputId) inputId.value = rec.id;
+  if (badgeId) badgeId.textContent = `#${rec.id}`;
+  if (subTitle) {
+    subTitle.textContent = `${formatWibTimestamp(rec.timestamp)} • Umur ${rec.hst} Hari • Varietas: ${rec.variety}`;
+  }
+  if (codeBadge) {
+    codeBadge.textContent = rec.decision_code || 'SAFE';
+    codeBadge.className = `px-2 py-0.5 rounded text-xs font-bold uppercase status-pill-${rec.decision_level || 'SAFE'}`;
+  }
+  if (titleEl) titleEl.textContent = rec.decision_title || 'Pemeriksaan';
+  if (sevFinalEl) sevFinalEl.textContent = `${Number(rec.severity_final).toFixed(1)}%`;
+  if (recEl) recEl.textContent = rec.recommendation || '-';
+
+  // Daun Atas
+  const topOrig = document.getElementById('valModalTopOrig');
+  const topMask = document.getElementById('valModalTopMask');
+  const topSev = document.getElementById('valModalTopSev');
+  const topGating = document.getElementById('valModalTopGating');
+  if (topOrig) topOrig.src = rec.img_top_orig || '';
+  if (topMask) topMask.src = rec.img_top_mask || '';
+  if (topSev) topSev.textContent = `${Number(rec.severity_top).toFixed(1)}%`;
+  if (topGating) {
+    topGating.textContent = `Gating: ${rec.gating_top_class} (${(Number(rec.gating_top_conf) * 100).toFixed(0)}%)`;
+  }
+
+  // Daun Bawah
+  const bottomOrig = document.getElementById('valModalBottomOrig');
+  const bottomMask = document.getElementById('valModalBottomMask');
+  const bottomSev = document.getElementById('valModalBottomSev');
+  const bottomGating = document.getElementById('valModalBottomGating');
+  if (bottomOrig) bottomOrig.src = rec.img_bottom_orig || '';
+  if (bottomMask) bottomMask.src = rec.img_bottom_mask || '';
+  if (bottomSev) bottomSev.textContent = `${Number(rec.severity_bottom).toFixed(1)}%`;
+  if (bottomGating) {
+    bottomGating.textContent = `Gating: ${rec.gating_bottom_class} (${(Number(rec.gating_bottom_conf) * 100).toFixed(0)}%)`;
+  }
+
+  // Sensor
+  const tempEl = document.getElementById('valModalTemp');
+  const humEl = document.getElementById('valModalHum');
+  const soilEl = document.getElementById('valModalSoil');
+  if (tempEl) tempEl.textContent = `${Number(rec.temperature).toFixed(1)} °C`;
+  if (humEl) humEl.textContent = `${Number(rec.humidity).toFixed(0)} %`;
+  if (soilEl) soilEl.textContent = `${Number(rec.soil_moisture).toFixed(0)} %`;
+
+  // Status Validasi Saat Ini
+  const currStatusBadge = document.getElementById('valModalCurrentStatusBadge');
+  const selectStatus = document.getElementById('valInputStatus');
+  const inputSevOverride = document.getElementById('valInputSeverityOverride');
+  const valAtEl = document.getElementById('valModalValidatedAt');
+  const inputNotes = document.getElementById('valInputNotes');
+
+  const curStatus = rec.validation_status || 'PENDING';
+  if (selectStatus) selectStatus.value = curStatus;
+  if (currStatusBadge) {
+    currStatusBadge.textContent = `Status: ${curStatus}`;
+  }
+  if (inputSevOverride) {
+    inputSevOverride.value = (rec.severity_override !== null && rec.severity_override !== undefined)
+      ? Number(rec.severity_override).toFixed(1)
+      : Number(rec.severity_final).toFixed(1);
+  }
+  if (valAtEl) {
+    valAtEl.textContent = rec.validated_at ? formatWibTimestamp(rec.validated_at) : 'Belum pernah divalidasi';
+  }
+  if (inputNotes) {
+    inputNotes.value = rec.validation_notes || '';
+  }
+
+  if (modal) modal.classList.remove('hidden');
+}
+
+function closeInspectionValidationModal() {
+  const modal = document.getElementById('inspectionValidationModal');
+  if (modal) modal.classList.add('hidden');
+  APP_STATE.activeInspectionDetail = null;
+}
+
+async function submitInspectionValidation(event) {
+  if (event) event.preventDefault();
+  const inputId = document.getElementById('valInputInspectionId');
+  const selectStatus = document.getElementById('valInputStatus');
+  const inputSevOverride = document.getElementById('valInputSeverityOverride');
+  const inputNotes = document.getElementById('valInputNotes');
+
+  if (!inputId || !inputId.value) {
+    showToast('ID pemeriksaan tidak valid');
+    return;
+  }
+
+  const inspectionId = parseInt(inputId.value, 10);
+  const status = selectStatus ? selectStatus.value : 'PENDING';
+  const notes = inputNotes ? inputNotes.value.trim() : '';
+  let sevOverride = null;
+  if (inputSevOverride && inputSevOverride.value !== '') {
+    const parsed = parseFloat(inputSevOverride.value);
+    if (!isNaN(parsed) && parsed >= 0 && parsed <= 100) {
+      sevOverride = parsed;
+    }
+  }
+
+  const payload = {
+    validation_status: status,
+    validation_notes: notes,
+    severity_override: sevOverride,
+  };
+
+  const btnSave = document.getElementById('btnSaveValidation');
+  if (btnSave) {
+    btnSave.disabled = true;
+    btnSave.textContent = 'Menyimpan...';
+  }
+
+  try {
+    const res = await fetch(`/api/v1/history/${inspectionId}/validate`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      showToast(`Validasi pemeriksaan #${inspectionId} berhasil disimpan!`);
+      closeInspectionValidationModal();
+      await loadInspectionHistory();
+    } else {
+      const errData = await res.json().catch(() => ({}));
+      showToast(`Gagal menyimpan validasi: ${errData.detail || 'Terjadi kesalahan'}`);
+    }
+  } catch (err) {
+    console.error('Validation submit error:', err);
+    showToast('Koneksi gagal saat menyimpan validasi');
+  } finally {
+    if (btnSave) {
+      btnSave.disabled = false;
+      btnSave.textContent = 'Simpan Validasi';
+    }
+  }
+}
+
+async function confirmDeleteInspection(inspectionId) {
+  if (!confirm(`Hapus riwayat pemeriksaan #${inspectionId}?\n\nFile foto daun asli dan hasil mask pada memori internal Arduino UNO Q akan dihapus secara permanen guna menghemat ruang penyimpanan eMMC.`)) {
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/v1/history/${inspectionId}`, {
+      method: 'DELETE',
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      showToast(`Pemeriksaan #${inspectionId} berhasil dihapus (${data.freed_kb || 0} KB memori UNO Q dibebaskan)!`);
+      closeInspectionValidationModal();
+      await loadInspectionHistory();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      showToast(`Gagal menghapus: ${err.detail || 'Terjadi kesalahan'}`);
+    }
+  } catch (err) {
+    console.error('Delete inspection error:', err);
+    showToast('Koneksi gagal saat menghapus riwayat pemeriksaan');
+  }
+}
+
+function deleteInspectionFromModal() {
+  const inputId = document.getElementById('valInputInspectionId');
+  if (inputId && inputId.value) {
+    confirmDeleteInspection(parseInt(inputId.value, 10));
   }
 }
 

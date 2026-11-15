@@ -21,8 +21,10 @@ from .camera_service import (
     webcam_controller,
 )
 from .database import (
+    delete_inspection,
     export_telemetry_csv_string,
     get_farm_settings,
+    get_inspection_by_id,
     get_inspection_history,
     get_latest_telemetry,
     get_recent_telemetry_window,
@@ -32,6 +34,7 @@ from .database import (
     insert_inspection,
     insert_telemetry,
     update_farm_settings,
+    update_inspection_validation,
 )
 from .decision_engine import (
     detect_post_rain_heat_spike,
@@ -121,6 +124,12 @@ class LedTestPayload(BaseModel):
 
 class CameraControlPayload(BaseModel):
     side: Optional[str] = "top"
+
+
+class InspectionValidationPayload(BaseModel):
+    validation_status: str  # VALIDATED_ACCURATE, VALIDATED_ADJUSTED, REJECTED_FALSE_POSITIVE, PENDING
+    validation_notes: Optional[str] = ""
+    severity_override: Optional[float] = None
 
 
 def seed_initial_inspections_if_empty() -> None:
@@ -644,6 +653,49 @@ def api_get_inspection_history(limit: int = 20) -> Dict[str, Any]:
         for r in reversed(records)
     ]
     return {"count": len(records), "records": records, "trend": trend}
+
+
+@app.get("/api/v1/history/{inspection_id}")
+def api_get_inspection_detail(inspection_id: int) -> Dict[str, Any]:
+    """Get complete inspection detail for re-checking and visual validation."""
+    rec = get_inspection_by_id(inspection_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Riwayat pemeriksaan tidak ditemukan")
+    return rec
+
+
+@app.delete("/api/v1/history/{inspection_id}")
+def api_delete_inspection(inspection_id: int) -> Dict[str, Any]:
+    """
+    Permanently delete an inspection record and remove associated leaf photos
+    from Arduino UNO Q's eMMC storage to free up disk space.
+    """
+    res = delete_inspection(inspection_id, capture_dir=CAPTURE_DIR)
+    if not res.get("success"):
+        raise HTTPException(status_code=404, detail=res.get("message", "Gagal menghapus"))
+    return res
+
+
+@app.put("/api/v1/history/{inspection_id}/validate")
+def api_validate_inspection(
+    inspection_id: int, payload: InspectionValidationPayload
+) -> Dict[str, Any]:
+    """
+    Update human agronomist validation status, notes, and optional severity override.
+    """
+    updated = update_inspection_validation(
+        inspection_id=inspection_id,
+        validation_status=payload.validation_status,
+        validation_notes=payload.validation_notes or "",
+        severity_override=payload.severity_override,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Riwayat pemeriksaan tidak ditemukan")
+    return {
+        "status": "VALIDATED",
+        "message": f"Validasi pemeriksaan #{inspection_id} berhasil disimpan.",
+        "record": updated,
+    }
 
 
 @app.post("/api/v1/settings")

@@ -88,10 +88,26 @@ def init_db() -> None:
             decision_level TEXT NOT NULL,
             recommendation TEXT NOT NULL,
             action_steps_json TEXT NOT NULL,
-            pipeline_metrics_json TEXT DEFAULT '{}'
+            pipeline_metrics_json TEXT DEFAULT '{}',
+            validation_status TEXT DEFAULT 'PENDING',
+            validation_notes TEXT DEFAULT '',
+            validated_at TEXT DEFAULT NULL,
+            severity_override REAL DEFAULT NULL
         )
         """
     )
+
+    # Safe migration for existing SQLite databases
+    for col_name, col_def in [
+        ("validation_status", "TEXT DEFAULT 'PENDING'"),
+        ("validation_notes", "TEXT DEFAULT ''"),
+        ("validated_at", "TEXT DEFAULT NULL"),
+        ("severity_override", "REAL DEFAULT NULL"),
+    ]:
+        try:
+            cur.execute(f"ALTER TABLE inspections ADD COLUMN {col_name} {col_def}")
+        except Exception:
+            pass
 
     # 3. Farm & Hardware Settings Table
     cur.execute(
@@ -446,3 +462,136 @@ def get_inspection_history(limit: int = 25) -> List[Dict[str, Any]]:
         rows.append(d)
     conn.close()
     return rows
+
+
+def get_inspection_by_id(inspection_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieve a single inspection record by ID with parsed JSON fields."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM inspections WHERE id = ?", (inspection_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["action_steps"] = json.loads(d.get("action_steps_json") or "[]")
+    except Exception:
+        d["action_steps"] = []
+    try:
+        d["pipeline_metrics"] = json.loads(d.get("pipeline_metrics_json") or "{}")
+    except Exception:
+        d["pipeline_metrics"] = {}
+    return d
+
+
+def delete_inspection(inspection_id: int, capture_dir: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Delete an inspection record from SQLite and permanently remove associated
+    image files from Arduino UNO Q's eMMC storage to free up disk space.
+    """
+    rec = get_inspection_by_id(inspection_id)
+    if not rec:
+        return {
+            "success": False,
+            "deleted_id": inspection_id,
+            "deleted_files": 0,
+            "freed_bytes": 0,
+            "freed_kb": 0.0,
+            "message": f"Pemeriksaan #{inspection_id} tidak ditemukan.",
+        }
+
+    deleted_files = 0
+    freed_bytes = 0
+
+    if capture_dir and os.path.isdir(capture_dir):
+        image_fields = [
+            "img_top_orig",
+            "img_top_mask",
+            "img_top_stage",
+            "img_bottom_orig",
+            "img_bottom_mask",
+            "img_bottom_stage",
+        ]
+        for field in image_fields:
+            val = rec.get(field)
+            if val and isinstance(val, str):
+                fname = os.path.basename(val)
+                fpath = os.path.join(capture_dir, fname)
+                if os.path.isfile(fpath):
+                    try:
+                        size = os.path.getsize(fpath)
+                        os.remove(fpath)
+                        freed_bytes += size
+                        deleted_files += 1
+                    except Exception as err:
+                        print(f"Warning: Gagal menghapus file {fpath}: {err}")
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM inspections WHERE id = ?", (inspection_id,))
+    conn.commit()
+    conn.close()
+
+    freed_kb = round(freed_bytes / 1024, 1)
+    return {
+        "success": True,
+        "deleted_id": inspection_id,
+        "deleted_files": deleted_files,
+        "freed_bytes": freed_bytes,
+        "freed_kb": freed_kb,
+        "message": f"Pemeriksaan #{inspection_id} dan {deleted_files} file foto berhasil dihapus. {freed_kb} KB memori Arduino UNO Q dibebaskan.",
+    }
+
+
+def update_inspection_validation(
+    inspection_id: int,
+    validation_status: str,
+    validation_notes: str = "",
+    severity_override: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Update human/agronomist validation for an inspection record.
+    Allows re-checking, validating diagnosis accuracy, adjusting severity,
+    and storing agronomist notes with timestamp.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    wib_now = get_wib_now_str()
+
+    if severity_override is not None:
+        cur.execute(
+            """
+            UPDATE inspections
+            SET validation_status = ?,
+                validation_notes = ?,
+                validated_at = ?,
+                severity_override = ?,
+                severity_final = ?
+            WHERE id = ?
+            """,
+            (
+                validation_status,
+                validation_notes,
+                wib_now,
+                float(severity_override),
+                float(severity_override),
+                inspection_id,
+            ),
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE inspections
+            SET validation_status = ?,
+                validation_notes = ?,
+                validated_at = ?
+            WHERE id = ?
+            """,
+            (validation_status, validation_notes, wib_now, inspection_id),
+        )
+
+    conn.commit()
+    conn.close()
+    return get_inspection_by_id(inspection_id)
+
