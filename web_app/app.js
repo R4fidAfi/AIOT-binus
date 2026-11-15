@@ -42,6 +42,10 @@ function hideToast() {
 /* ================= REAL-TIME CLOCK: KOTA TANGERANG (WIB / UTC+7) ================= */
 function updateTangerangLiveClock() {
   const now = new Date();
+  const dateEl = document.getElementById('liveClockDate');
+  const timeEl = document.getElementById('liveClockTime');
+  if (!dateEl && !timeEl) return;
+
   try {
     const dateOptions = {
       timeZone: 'Asia/Jakarta',
@@ -62,24 +66,29 @@ function updateTangerangLiveClock() {
     let timeStr = new Intl.DateTimeFormat('id-ID', timeOptions).format(now);
     timeStr = timeStr.replace(/\./g, ':');
 
-    const dateEl = document.getElementById('liveClockDate');
-    const timeEl = document.getElementById('liveClockTime');
     if (dateEl) dateEl.textContent = dateStr;
     if (timeEl) timeEl.textContent = timeStr;
   } catch (err) {
-    const dateEl = document.getElementById('liveClockDate');
-    const timeEl = document.getElementById('liveClockTime');
-    if (dateEl) dateEl.textContent = now.toLocaleDateString('id-ID');
-    if (timeEl) timeEl.textContent = now.toLocaleTimeString('id-ID');
+    // Robust fallback: kalkulasi manual UTC+7
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const wib = new Date(utc + (3600000 * 7));
+    const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const months = [
+      '', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    const pad = (n) => (n < 10 ? '0' : '') + n;
+    if (dateEl) dateEl.textContent = `${days[wib.getDay()]}, ${wib.getDate()} ${months[wib.getMonth() + 1]} ${wib.getFullYear()}`;
+    if (timeEl) timeEl.textContent = `${pad(wib.getHours())}:${pad(wib.getMinutes())}:${pad(wib.getSeconds())}`;
   }
 }
 
 function formatWibTimestamp(tsStr) {
   if (!tsStr) return '-';
   try {
-    const clean = String(tsStr).trim();
+    const clean = String(tsStr).trim().replace('T', ' ').split('.')[0];
     const parts = clean.split(' ');
-    if (parts.length === 2) {
+    if (parts.length >= 2) {
       const dateParts = parts[0].split('-');
       const timePart = parts[1];
       if (dateParts.length === 3) {
@@ -102,9 +111,9 @@ function formatWibTimestamp(tsStr) {
 
 function formatWibTimeOnly(tsStr) {
   if (!tsStr) return '--:--:--';
-  const clean = String(tsStr).trim();
+  const clean = String(tsStr).trim().replace('T', ' ').split('.')[0];
   const parts = clean.split(' ');
-  return parts.length === 2 ? parts[1] : clean.slice(-8);
+  return parts.length >= 2 ? parts[1] : clean.slice(-8);
 }
 
 /* ================= NAVIGATION TABS ================= */
