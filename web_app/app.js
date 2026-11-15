@@ -1696,11 +1696,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 3. Pra-muat data sensor di latar belakang agar tabel langsung terisi saat tab dibuka
   loadTelemetryAndChart();
 
-  // 4. Sinkronisasi Real-Time otomatis setiap 5 detik dari sensor ESP32
+  // 4. Sinkronisasi Real-Time otomatis setiap 3 detik dari sensor ESP32
   setInterval(() => {
     loadStatusAndHeader();
     if (APP_STATE.activeTab === 'tab-land') {
       loadTelemetryAndChart();
     }
-  }, 5000);
+  }, 3000);
 });
