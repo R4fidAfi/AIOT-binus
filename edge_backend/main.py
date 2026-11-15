@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -21,6 +21,7 @@ from .camera_service import (
     webcam_controller,
 )
 from .database import (
+    export_telemetry_csv_string,
     get_farm_settings,
     get_inspection_history,
     get_latest_telemetry,
@@ -324,6 +325,21 @@ def api_get_telemetry_history(limit: int = 24) -> Dict[str, Any]:
     }
 
 
+@app.get("/api/v1/telemetry/export.csv")
+def api_export_telemetry_csv(limit: int = 500) -> Response:
+    """
+    Exports recent microclimate and soil moisture telemetry readings as a downloadable CSV.
+    """
+    csv_data = export_telemetry_csv_string(limit=limit)
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=riwayat_telemetri_kangkung.csv"
+        },
+    )
+
+
 @app.post("/api/v1/camera/start")
 def api_start_live_webcam(payload: Optional[CameraControlPayload] = None) -> Dict[str, Any]:
     """
@@ -338,9 +354,10 @@ def api_start_live_webcam(payload: Optional[CameraControlPayload] = None) -> Dic
 @app.post("/api/v1/camera/stop")
 def api_stop_live_webcam() -> Dict[str, Any]:
     """
-    Pauses live stream and turns OFF LED Ring while keeping hardware handle warm.
+    Stops live stream, completely releases the USB Webcam hardware handle (turns OFF webcam LED indicator),
+    and turns OFF the LED Ring.
     """
-    info = webcam_controller.pause_stream()
+    info = webcam_controller.release_hardware()
     return {"status": "CAMERA_OFF", "camera": info}
 
 

@@ -539,63 +539,56 @@ class OnDemandWebcamController:
 
     def start_camera(self, side: str = "top") -> Dict[str, Any]:
         """
-        Turn ON LED Ring and resume/open USB Webcam.
-        Keeps the hardware handle warm between top and bottom surfaces, preventing Linux V4L2
-        EBUSY lockouts and eliminating dummy AI leaf fallback.
+        Turn ON LED Ring and open USB Webcam cleanly.
+        Ensures hardware indicator turns ON, V4L2 queue is brand new, and live preview starts immediately.
         """
         with self.lock:
             self.active_side = "top" if side.lower() not in ("bottom", "bawah") else "bottom"
             self.stream_started_at = time.time()
             self.last_activity_at = time.time()
+
+            # Ensure any leftover worker or cap is cleanly shut down first
+            if self.worker is not None:
+                try:
+                    self.worker.stop()
+                    self.worker.join(timeout=0.2)
+                except Exception:
+                    pass
+                self.worker = None
+
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+                time.sleep(0.06)  # Short settling delay for kernel V4L2 driver cleanup
+
             rig_bridge.set_led_ring(True, pwm=225)
 
             hardware_ready = False
-
-            # 1. Fast path: check if existing hardware handle is already alive and responsive
-            if self.cap is not None and self.cap.isOpened():
-                try:
+            if os.environ.get("DISABLE_USB_WEBCAM", "0") != "1":
+                ensure_usb_host_mode()
+                cap, working_idx = open_active_webcam(self.camera_index)
+                if cap is not None and cap.isOpened():
+                    self.cap = cap
+                    self.camera_index = working_idx
+                    hardware_ready = True
                     for _ in range(3):
                         ret, test_frame = self.cap.read()
                         if ret and test_frame is not None and test_frame.size > 0:
                             self.last_frame = test_frame
-                            hardware_ready = True
                             break
                         time.sleep(0.02)
-                except Exception:
-                    hardware_ready = False
-
-                if not hardware_ready:
-                    # Stale or disconnected handle, release before re-acquiring
-                    try:
-                        self.cap.release()
-                    except Exception:
-                        pass
+                else:
                     self.cap = None
-
-            # 2. Slow path: open physical webcam if not already open
-            if not hardware_ready:
-                if os.environ.get("DISABLE_USB_WEBCAM", "0") != "1":
-                    cap, working_idx = open_active_webcam(self.camera_index)
-                    if cap is not None and cap.isOpened():
-                        self.cap = cap
-                        self.camera_index = working_idx
-                        hardware_ready = True
-                        for _ in range(3):
-                            ret, test_frame = self.cap.read()
-                            if ret and test_frame is not None and test_frame.size > 0:
-                                self.last_frame = test_frame
-                                break
-                            time.sleep(0.02)
-                    else:
-                        self.cap = None
 
             self.is_streaming = True
 
-            # 3. Launch dedicated low-latency reader thread
+            # Launch dedicated low-latency reader thread
             if hardware_ready and self.cap is not None:
-                if self.worker is None or not self.worker.is_alive():
-                    self.worker = CameraWorkerThread(self.cap)
-                    self.worker.start()
+                self.worker = CameraWorkerThread(self.cap)
+                self.worker.start()
                 self.last_source_mode = f"USB_WEBCAM_LIVE (video{self.camera_index})"
             else:
                 self.last_source_mode = "VIRTUAL_WEBCAM_VIEWFINDER"
@@ -611,34 +604,15 @@ class OnDemandWebcamController:
 
     def pause_stream(self) -> Dict[str, Any]:
         """
-        Pauses live stream loop and turns OFF LED Ring, while KEEPING the physical
-        cv2.VideoCapture handle warm in memory. Eliminates V4L2 EBUSY device lockout
-        when transitioning between Daun Atas and Daun Bawah.
-        CPU load is 0% during pause because worker thread is safely stopped.
+        Safely stops the stream and releases physical webcam hardware.
+        Ensures the webcam hardware indicator LED turns OFF and releases V4L2 device.
         """
-        with self.lock:
-            self.is_streaming = False
-            self.last_activity_at = time.time()
-            if self.worker is not None:
-                try:
-                    self.worker.stop()
-                    self.worker.join(timeout=0.25)
-                except Exception:
-                    pass
-                self.worker = None
-
-            rig_bridge.set_led_ring(False, pwm=0)
-            return {
-                "is_streaming": False,
-                "led_ring_on": False,
-                "hardware_warm": self.cap is not None and self.cap.isOpened(),
-                "status": "STREAM_PAUSED_HARDWARE_WARM",
-            }
+        return self.release_hardware()
 
     def release_hardware(self) -> Dict[str, Any]:
         """
         Completely releases the USB Webcam hardware handle (cap.release()), stops worker thread,
-        and turns OFF LED Ring. Frees all RAM and CPU for 5-Stage AI Pipeline or full session reset.
+        and turns OFF LED Ring. Frees all RAM and CPU, and ensures the physical webcam indicator LED turns OFF.
         """
         with self.lock:
             self.is_streaming = False
@@ -666,11 +640,9 @@ class OnDemandWebcamController:
                 "status": "HARDWARE_COMPLETELY_RELEASED",
             }
 
-    def stop_camera(self, release_hw: bool = False) -> Dict[str, Any]:
-        """Backward-compatible stop call. Default keeps hardware warm between surfaces."""
-        if release_hw:
-            return self.release_hardware()
-        return self.pause_stream()
+    def stop_camera(self, release_hw: bool = True) -> Dict[str, Any]:
+        """Stops live webcam and releases physical hardware handle completely."""
+        return self.release_hardware()
 
     def read_preview_frame(
         self,
@@ -846,9 +818,8 @@ def capture_leaf_surface(
                         break
                     time.sleep(0.03)
 
-        # Pause stream and turn off LED ring, but KEEP cv2.VideoCapture handle warm!
-        # This guarantees transitioning to Daun Bawah (or retrying Daun Atas) never hits V4L2 EBUSY.
-        webcam_controller.pause_stream()
+        # Release hardware completely and turn off LED ring immediately after capturing frame
+        webcam_controller.release_hardware()
 
     # Fallback if called directly or if frame read failed
     if frame is None or frame.size == 0:

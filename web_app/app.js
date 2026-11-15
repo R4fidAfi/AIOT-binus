@@ -646,7 +646,7 @@ async function stopLiveWebcamToStandby(silent = false) {
   APP_STATE.capturePhase = isTop ? 'TOP_STANDBY' : 'BOTTOM_STANDBY';
   renderSingleCameraUI();
   if (!silent) {
-    showToast('Kamera dimatikan (Mode Hemat RAM UNO Q).');
+    showToast('Kamera dimatikan (Webcam & Lampu LED Mati).');
   }
 }
 
@@ -961,7 +961,7 @@ async function resetInspectionSession() {
 /* ================= MENU 2: MIKROKLIMAT & LEMBAB TANAH ================= */
 async function loadTelemetryAndChart() {
   try {
-    const res = await fetch('/api/v1/telemetry/history?limit=12');
+    const res = await fetch('/api/v1/telemetry/history?limit=25');
     const data = await res.json();
     const latest = data.latest || {};
     const radar = data.weather_radar || {};
@@ -1099,6 +1099,36 @@ async function loadTelemetryAndChart() {
         `;
         simpleList.appendChild(rowEl);
       });
+    }
+
+    // Mengisi Tabel Riwayat Lengkap Nilai Sensor ESP32
+    const tableBody = document.getElementById('telemetryHistoryTableBody');
+    if (tableBody) {
+      if (!history || history.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="6" class="py-3 px-3 text-center text-slate-400">Belum ada data sensor tercatat.</td></tr>';
+      } else {
+        tableBody.innerHTML = '';
+        const recentRows = history.slice(-20).reverse();
+        recentRows.forEach((r) => {
+          const sVal = Number(r.soil_moisture || 0);
+          const isDry = sVal < 35.0;
+          const tr = document.createElement('tr');
+          tr.className = 'hover:bg-slate-50 transition-colors';
+          tr.innerHTML = `
+            <td class="py-2 px-3 font-mono-num text-slate-600 whitespace-nowrap">${r.timestamp || '-'}</td>
+            <td class="py-2 px-3 font-mono-num font-semibold text-slate-800">${Number(r.temperature || 0).toFixed(1)} °C</td>
+            <td class="py-2 px-3 font-mono-num text-slate-700">${Number(r.humidity || 0).toFixed(1)} %</td>
+            <td class="py-2 px-3 font-mono-num font-semibold ${isDry ? 'text-amber-800' : 'text-emerald-800'}">${sVal.toFixed(1)} %</td>
+            <td class="py-2 px-3 font-mono-num text-slate-500">${r.adc_raw || '-'}</td>
+            <td class="py-2 px-3">
+              <span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase ${isDry ? 'status-pill-WARNING_WATER' : 'status-pill-SAFE'}">
+                ${isDry ? 'Perlu Disiram' : 'Cukup Air'}
+              </span>
+            </td>
+          `;
+          tableBody.appendChild(tr);
+        });
+      }
     }
   } catch (err) {
     console.error('Error loading telemetry chart:', err);

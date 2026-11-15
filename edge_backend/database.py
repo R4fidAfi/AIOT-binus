@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "edge_kangkung.db")
+TELEMETRY_CSV_PATH = os.path.join(BASE_DIR, "sensor_telemetry.csv")
 
 
 def get_connection() -> sqlite3.Connection:
@@ -216,6 +217,47 @@ def update_farm_settings(
     return get_farm_settings()
 
 
+def append_telemetry_csv(
+    timestamp: str,
+    temperature: float,
+    humidity: float,
+    soil_moisture: float,
+    adc_raw: int,
+    node_id: str,
+    post_rain_spike: int,
+) -> None:
+    """Appends each telemetry measurement into CSV for offline spreadsheet/dataset analysis."""
+    try:
+        write_header = not os.path.exists(TELEMETRY_CSV_PATH) or os.path.getsize(TELEMETRY_CSV_PATH) == 0
+        status_air = "KERING" if soil_moisture < 35.0 else ("CUKUP_AIR" if soil_moisture <= 75.0 else "BASAH")
+        with open(TELEMETRY_CSV_PATH, "a", encoding="utf-8") as f:
+            if write_header:
+                f.write("Waktu,Node_ID,Suhu_Udara_C,Lembab_Udara_RH,Lembab_Tanah_Pct,ADC_Raw_12bit,Status_Air,Post_Rain_Spike\n")
+            f.write(
+                f"{timestamp},{node_id},{temperature:.1f},{humidity:.1f},{soil_moisture:.1f},{adc_raw},{status_air},{post_rain_spike}\n"
+            )
+    except Exception as e:
+        print(f"[CSV_LOG] Warning writing CSV: {e}", flush=True)
+
+
+def export_telemetry_csv_string(limit: int = 500) -> str:
+    """Exports recent telemetry records as a formatted CSV string for download."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM telemetry ORDER BY id DESC LIMIT ?", (limit,))
+    rows = cur.fetchall()
+    conn.close()
+
+    lines = ["Waktu,Node_ID,Suhu_Udara_C,Lembab_Udara_RH,Lembab_Tanah_Pct,ADC_Raw_12bit,Status_Air,Post_Rain_Spike"]
+    for r in reversed(rows):
+        s_val = float(r["soil_moisture"])
+        status_air = "KERING" if s_val < 35.0 else ("CUKUP_AIR" if s_val <= 75.0 else "BASAH")
+        lines.append(
+            f"{r['timestamp']},{r['node_id']},{float(r['temperature']):.1f},{float(r['humidity']):.1f},{s_val:.1f},{r['adc_raw']},{status_air},{r['post_rain_heat_spike']}"
+        )
+    return "\n".join(lines)
+
+
 def insert_telemetry(
     temperature: float,
     humidity: float,
@@ -248,6 +290,18 @@ def insert_telemetry(
     )
     conn.commit()
     conn.close()
+
+    # Automatically log to CSV in parallel with SQLite
+    append_telemetry_csv(
+        timestamp=now_str,
+        temperature=round(float(temperature), 1),
+        humidity=round(float(humidity), 1),
+        soil_moisture=round(float(soil_moisture), 1),
+        adc_raw=int(adc_raw),
+        node_id=node_id,
+        post_rain_spike=int(post_rain_heat_spike),
+    )
+
     return {
         "id": row_id,
         "timestamp": now_str,
