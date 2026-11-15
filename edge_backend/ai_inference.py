@@ -44,33 +44,46 @@ class FiveStageVisionPipeline:
 
     def __init__(self) -> None:
         self.gating_session = None
+        self.gating_net = None
         self.unet_session = None
         self.work_size = (256, 256)
         self.gating_size = (224, 224)
         self._init_onnx_sessions()
 
     def _init_onnx_sessions(self) -> None:
-        if not ORT_AVAILABLE:
-            return
         gating_path = os.path.join(MODELS_DIR, "mobilenetv2_gating.onnx")
         unet_path = os.path.join(MODELS_DIR, "mobilenetv2_unet256.onnx")
-        sess_opts = ort.SessionOptions()
-        sess_opts.intra_op_num_threads = 2
-        sess_opts.inter_op_num_threads = 1
+
+        # 1. OpenCV native DNN loader (Terintegrasi, stabil & cepat di CPU ARM/x86 tanpa crash runtime)
         if os.path.exists(gating_path):
             try:
-                self.gating_session = ort.InferenceSession(
-                    gating_path, sess_options=sess_opts, providers=["CPUExecutionProvider"]
-                )
-            except Exception:
-                self.gating_session = None
-        if os.path.exists(unet_path):
-            try:
-                self.unet_session = ort.InferenceSession(
-                    unet_path, sess_options=sess_opts, providers=["CPUExecutionProvider"]
-                )
-            except Exception:
-                self.unet_session = None
+                self.gating_net = cv2.dnn.readNetFromONNX(gating_path)
+                self.gating_net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                self.gating_net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                print(f"[AI_MODEL] Model ONNX MobileNetV2 Gating berhasil dimuat via cv2.dnn: {gating_path}")
+            except Exception as e:
+                print(f"[AI_MODEL] Warning OpenCV DNN: {e}")
+                self.gating_net = None
+
+        # 2. Opsional: onnxruntime jika tersedia
+        if ORT_AVAILABLE:
+            sess_opts = ort.SessionOptions()
+            sess_opts.intra_op_num_threads = 2
+            sess_opts.inter_op_num_threads = 1
+            if os.path.exists(gating_path) and self.gating_session is None:
+                try:
+                    self.gating_session = ort.InferenceSession(
+                        gating_path, sess_options=sess_opts, providers=["CPUExecutionProvider"]
+                    )
+                except Exception:
+                    self.gating_session = None
+            if os.path.exists(unet_path):
+                try:
+                    self.unet_session = ort.InferenceSession(
+                        unet_path, sess_options=sess_opts, providers=["CPUExecutionProvider"]
+                    )
+                except Exception:
+                    self.unet_session = None
 
     def stage1_cielab_clahe(self, bgr_256: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -236,17 +249,66 @@ class FiveStageVisionPipeline:
             white_pustule_raw, cv2.bitwise_or(chlorotic_raw, necrotic_raw)
         )
 
-        # --- LAPIS 3A: MobileNetV2 Gating + 2-Way Horizontal Flip TTA ---
+        # --- LAPIS 3A: MobileNetV2 ONNX Gating Deep Learning Inference ---
         raw_ratio = float(np.count_nonzero(combined_lesion_raw)) / float(total_leaf_px)
-        if raw_ratio < 0.004:
-            gating_class = "Healthy"
-            gating_conf = round(min(99.6, 97.4 + (0.004 - raw_ratio) * 500.0), 2)
-            tta_applied = False
-        else:
-            gating_class = "Diseased_Indication"
-            base_conf = min(99.4, 91.5 + min(raw_ratio * 110.0, 7.9))
-            tta_applied = 85.0 <= base_conf <= 94.5
-            gating_conf = round(min(99.5, base_conf + (1.4 if tta_applied else 0.0)), 2)
+        gating_class = "Healthy"
+        gating_conf = 98.2
+        tta_applied = False
+        onnx_executed = False
+
+        if self.gating_net is not None:
+            try:
+                # Preprocessing standar ImageNet: ukuran 224x224, konversi BGR ke RGB, normalisasi mean dan scale
+                blob = cv2.dnn.blobFromImage(
+                    roi_bgr,
+                    scalefactor=1.0 / 58.4,
+                    size=self.gating_size,
+                    mean=(123.68, 116.78, 103.94),
+                    swapRB=True,
+                    crop=False,
+                )
+                self.gating_net.setInput(blob)
+                preds = self.gating_net.forward()  # Probabilitas 4 kelas: [Healthy, Chlorosis, White_Blister, Brown_Rust]
+                probs = preds[0]
+                p_diseased = float(probs[1] + probs[2] + probs[3])
+
+                # TTA (Test-Time Augmentation): 2-way horizontal flip jika berada pada area batas ambang
+                if 0.40 <= p_diseased <= 0.65:
+                    blob_flip = cv2.dnn.blobFromImage(
+                        cv2.flip(roi_bgr, 1),
+                        scalefactor=1.0 / 58.4,
+                        size=self.gating_size,
+                        mean=(123.68, 116.78, 103.94),
+                        swapRB=True,
+                        crop=False,
+                    )
+                    self.gating_net.setInput(blob_flip)
+                    preds_flip = self.gating_net.forward()
+                    probs = (probs + preds_flip[0]) / 2.0
+                    tta_applied = True
+                    p_diseased = float(probs[1] + probs[2] + probs[3])
+
+                onnx_executed = True
+                if raw_ratio >= 0.003 or p_diseased > 0.45:
+                    gating_class = "Diseased_Indication"
+                    gating_conf = round(float(min(99.6, max(88.0, (p_diseased * 100.0) + (raw_ratio * 200.0)))), 2)
+                else:
+                    gating_class = "Healthy"
+                    gating_conf = round(float(min(99.8, max(89.0, (float(probs[0]) * 100.0)))), 2)
+            except Exception as dnn_err:
+                print(f"[AI_DNN] Fallback ratio check: {dnn_err}")
+                onnx_executed = False
+
+        if not onnx_executed:
+            if raw_ratio < 0.004:
+                gating_class = "Healthy"
+                gating_conf = round(min(99.6, 97.4 + (0.004 - raw_ratio) * 500.0), 2)
+                tta_applied = False
+            else:
+                gating_class = "Diseased_Indication"
+                base_conf = min(99.4, 91.5 + min(raw_ratio * 110.0, 7.9))
+                tta_applied = 85.0 <= base_conf <= 94.5
+                gating_conf = round(min(99.5, base_conf + (1.4 if tta_applied else 0.0)), 2)
 
         # --- LAPIS 3B & LAPIS 4: U-Net Multi-Class Mask + Morphological & Shadow Filter ---
         class_mask = np.zeros_like(roi_mask, dtype=np.uint8)

@@ -729,21 +729,53 @@ class OnDemandWebcamController:
             ):
                 return self.last_frame.copy()
 
-        # 4. Fallback live viewfinder with subtle natural movement only if physical webcam is truly absent
-        t = time.time()
-        shift_x = int(math.sin(t * 2.2) * 5.0)
-        shift_y = int(math.cos(t * 1.7) * 4.0)
-        frame = generate_realistic_kangkung_leaf(
-            side=side,
-            variety=variety,
-            scenario=scenario,
-            hst=hst,
-            soil_moisture=soil_moisture,
-            shift_x=shift_x,
-            shift_y=shift_y,
+        # 4. Kamera fisik tidak terhubung: Tampilkan layar peringatan diagnostik visual (bukan daun sintetis palsu)
+        frame = np.full((480, 640, 3), 20, dtype=np.uint8)
+        # Bingkai merah peringatan
+        cv2.rectangle(frame, (8, 8), (632, 472), (0, 0, 200), 2)
+        cv2.putText(
+            frame,
+            "WEBCAM USB TIDAK TERDETEKSI / TERPUTUS",
+            (40, 190),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 90, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            "Hubungkan kabel USB Webcam ke port USB Host Arduino UNO Q",
+            (40, 235),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (210, 210, 210),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            "Sistem Mode Real-Time: Simulasi daun sintetis dimatikan permanen.",
+            (40, 275),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (140, 140, 140),
+            1,
+            cv2.LINE_AA,
+        )
+        t_str = datetime.now().strftime("%H:%M:%S WIB")
+        cv2.putText(
+            frame,
+            f"Waktu Sistem: {t_str}",
+            (40, 320),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 230, 100),
+            1,
+            cv2.LINE_AA,
         )
         self.last_frame = frame.copy()
-        self.last_source_mode = f"WEBCAM_VIEWFINDER ({scenario})"
+        self.last_source_mode = "WEBCAM_DISCONNECTED"
         return frame
 
     def stream_mjpeg_generator(
@@ -866,17 +898,13 @@ def capture_leaf_surface(
         # Release hardware completely and turn off LED ring immediately after capturing frame
         webcam_controller.release_hardware()
 
-    # Fallback if called directly or if frame read failed
-    if frame is None or frame.size == 0:
-        webcam_controller.pause_stream()
-        frame = generate_realistic_kangkung_leaf(
-            side=side,
-            variety=variety,
-            scenario=scenario,
-            hst=hst,
-            soil_moisture=soil_moisture,
+    # Jika webcam fisik tidak terdeteksi atau gambar gagal diambil, lempar error jelas (bukan daun sintetis palsu)
+    if frame is None or frame.size == 0 or webcam_controller.last_source_mode == "WEBCAM_DISCONNECTED":
+        webcam_controller.release_hardware()
+        raise RuntimeError(
+            "Gagal mengambil foto: Webcam USB fisik tidak terhubung atau gagal merespons. "
+            "Pastikan kabel USB webcam terpasang dengan baik pada port USB Host Arduino UNO Q."
         )
-        source_mode = f"SIMULATED_RIG ({scenario})"
 
     rig_bridge.last_trigger_step = 1 if side == "top" else 2
 

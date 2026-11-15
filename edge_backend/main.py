@@ -4,6 +4,7 @@ Serves the Mobile-First Web Application (/web_app) and REST API (/api/v1/*).
 """
 
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
@@ -87,7 +88,18 @@ CURRENT_SESSION: Dict[str, Any] = {
     "bottom_url": None,
     "bottom_meta": None,
     "last_updated": None,
+    "last_updated_time": 0.0,
 }
+
+SESSION_TIMEOUT_SECONDS = 300  # Batas waktu maksimal 5 menit untuk sesi foto gantung
+
+
+def check_and_clean_stale_session() -> None:
+    """Membatalkan dan membersihkan sesi foto gantung jika sudah lebih dari 5 menit tanpa foto lanjutan."""
+    if CURRENT_SESSION.get("last_updated_time", 0.0) > 0:
+        age = time.time() - CURRENT_SESSION["last_updated_time"]
+        if age > SESSION_TIMEOUT_SECONDS and (not CURRENT_SESSION["top_abs_path"] or not CURRENT_SESSION["bottom_abs_path"]):
+            api_reset_capture_session()
 
 
 class TelemetryPayload(BaseModel):
@@ -277,6 +289,7 @@ def serve_web_app() -> FileResponse:
 
 @app.get("/api/v1/status")
 def api_get_status() -> Dict[str, Any]:
+    check_and_clean_stale_session()
     settings = get_farm_settings()
     telemetry = get_latest_telemetry()
     recent_window = get_recent_telemetry_window(hours=6)
@@ -355,16 +368,19 @@ def api_get_telemetry_history(limit: int = 24) -> Dict[str, Any]:
 
 
 @app.get("/api/v1/telemetry/export.csv")
-def api_export_telemetry_csv(limit: int = 500) -> Response:
+def api_export_telemetry_csv(range: str = "all", limit: Optional[int] = None) -> Response:
     """
-    Exports recent microclimate and soil moisture telemetry readings as a downloadable CSV.
+    Exports microclimate and soil moisture telemetry readings as a downloadable CSV.
+    Supports filtering by time range ('1h', '6h', '24h', '7d', 'all').
     """
-    csv_data = export_telemetry_csv_string(limit=limit)
+    csv_data = export_telemetry_csv_string(time_range=range, limit=limit)
+    filename = f"telemetry_{range}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     return Response(
         content=csv_data,
         media_type="text/csv",
         headers={
-            "Content-Disposition": "attachment; filename=riwayat_telemetri_kangkung.csv"
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Cache-Control": "no-cache",
         },
     )
 
@@ -467,6 +483,7 @@ async def api_capture_leaf_side(
         CURRENT_SESSION["bottom_meta"] = meta
 
     CURRENT_SESSION["last_updated"] = get_wib_now_str()
+    CURRENT_SESSION["last_updated_time"] = time.time()
 
     return {
         "status": "CAPTURED",
@@ -492,6 +509,7 @@ def api_reset_capture_session() -> Dict[str, Any]:
     CURRENT_SESSION["bottom_abs_path"] = None
     CURRENT_SESSION["bottom_url"] = None
     CURRENT_SESSION["bottom_meta"] = None
+    CURRENT_SESSION["last_updated_time"] = 0.0
     rig_bridge.last_trigger_step = 0
     return {"status": "RESET"}
 

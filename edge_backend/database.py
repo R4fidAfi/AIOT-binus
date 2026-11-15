@@ -54,6 +54,9 @@ def init_db() -> None:
         )
         """
     )
+    # Indeks B-Tree berkecepatan tinggi untuk pencarian timestamp telemetri (Mencegah Full Table Scan)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_timestamp ON telemetry(timestamp);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_inspections_timestamp ON inspections(timestamp);")
 
     # 2. Dual-Surface Inspections Table (Top/Adaxial + Bottom/Abaxial + 5-Stage CV + Decision)
     cur.execute(
@@ -256,8 +259,15 @@ def append_telemetry_csv(
     node_id: str,
     post_rain_spike: int,
 ) -> None:
-    """Appends each telemetry measurement into CSV for offline spreadsheet/dataset analysis."""
+    """Appends each telemetry measurement into CSV with automatic file rotation at 5 MB."""
     try:
+        # Rotasi log otomatis jika file CSV melebihi 5 MB (~60.000 baris) agar flash eMMC UNO Q aman
+        if os.path.exists(TELEMETRY_CSV_PATH) and os.path.getsize(TELEMETRY_CSV_PATH) > 5 * 1024 * 1024:
+            prev_path = TELEMETRY_CSV_PATH + ".prev"
+            if os.path.exists(prev_path):
+                os.remove(prev_path)
+            os.rename(TELEMETRY_CSV_PATH, prev_path)
+
         write_header = not os.path.exists(TELEMETRY_CSV_PATH) or os.path.getsize(TELEMETRY_CSV_PATH) == 0
         status_air = "KERING" if soil_moisture < 35.0 else ("CUKUP_AIR" if soil_moisture <= 75.0 else "BASAH")
         with open(TELEMETRY_CSV_PATH, "a", encoding="utf-8") as f:
@@ -270,22 +280,48 @@ def append_telemetry_csv(
         print(f"[CSV_LOG] Warning writing CSV: {e}", flush=True)
 
 
-def export_telemetry_csv_string(limit: int = 500) -> str:
-    """Exports recent telemetry records as a formatted CSV string for download."""
+def export_telemetry_csv_string(time_range: str = "all", limit: Optional[int] = None) -> str:
+    """
+    Exports recent telemetry records as a formatted CSV string with time range filtering:
+    - '1h'  : 1 jam terakhir
+    - '6h'  : 6 jam terakhir
+    - '24h' : 24 jam terakhir (1 hari)
+    - '7d'  : 7 hari terakhir (1 minggu)
+    - 'all' : Seluruh data (dibatasi limit keamanan eMMC, default 25.000 baris)
+    """
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM telemetry ORDER BY id DESC LIMIT ?", (limit,))
+
+    if time_range == "1h":
+        since_time = (get_wib_now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute("SELECT * FROM telemetry WHERE timestamp >= ? ORDER BY timestamp ASC", (since_time,))
+    elif time_range == "6h":
+        since_time = (get_wib_now() - timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute("SELECT * FROM telemetry WHERE timestamp >= ? ORDER BY timestamp ASC", (since_time,))
+    elif time_range == "24h":
+        since_time = (get_wib_now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute("SELECT * FROM telemetry WHERE timestamp >= ? ORDER BY timestamp ASC", (since_time,))
+    elif time_range == "7d":
+        since_time = (get_wib_now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute("SELECT * FROM telemetry WHERE timestamp >= ? ORDER BY timestamp ASC", (since_time,))
+    else:
+        max_limit = limit or 25000
+        cur.execute("SELECT * FROM telemetry ORDER BY id DESC LIMIT ?", (max_limit,))
+
     rows = cur.fetchall()
     conn.close()
 
+    if time_range == "all":
+        rows = list(reversed(rows))
+
     lines = ["Waktu,Node_ID,Suhu_Udara_C,Lembab_Udara_RH,Lembab_Tanah_Pct,ADC_Raw_12bit,Status_Air,Post_Rain_Spike"]
-    for r in reversed(rows):
+    for r in rows:
         s_val = float(r["soil_moisture"])
         status_air = "KERING" if s_val < 35.0 else ("CUKUP_AIR" if s_val <= 75.0 else "BASAH")
         lines.append(
             f"{r['timestamp']},{r['node_id']},{float(r['temperature']):.1f},{float(r['humidity']):.1f},{s_val:.1f},{r['adc_raw']},{status_air},{r['post_rain_heat_spike']}"
         )
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def insert_telemetry(
@@ -382,6 +418,14 @@ def get_recent_telemetry_window(hours: int = 6) -> List[Dict[str, Any]]:
         "SELECT * FROM telemetry WHERE timestamp >= ? ORDER BY id ASC", (cutoff,)
     )
     rows = [dict(r) for r in cur.fetchall()]
+    # Cold-start fallback: jika sistem baru dinyalakan dan baris jendela 6 jam < 10,
+    # ambil data telemetri historis terakhir dari database agar acuan baseline suhu/kelembaban tidak nol
+    if len(rows) < 10:
+        cur.execute("SELECT * FROM telemetry ORDER BY id DESC LIMIT 25")
+        fallback_rows = [dict(r) for r in cur.fetchall()]
+        if fallback_rows:
+            fallback_rows.reverse()
+            rows = fallback_rows
     conn.close()
     return rows
 

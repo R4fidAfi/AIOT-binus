@@ -1220,6 +1220,14 @@ async function loadTelemetryAndChart() {
   }
 }
 
+function updateCsvDownloadLink() {
+  const sel = document.getElementById('csvTimeRangeSelect');
+  const btn = document.getElementById('btnDownloadCsv');
+  if (sel && btn) {
+    btn.href = `/api/v1/telemetry/export.csv?range=${sel.value}`;
+  }
+}
+
 /* ================= MENU 3: RIWAYAT & PERKEMBANGAN KESEHATAN DAUN ================= */
 async function loadInspectionHistory() {
   try {

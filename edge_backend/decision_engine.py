@@ -59,13 +59,25 @@ def detect_post_rain_heat_spike(
     rh_drop = round(max_rh_6h - current_rh, 1)
     temp_rise = round(current_temp - min_temp_6h, 1)
 
-    is_spike = (max_rh_6h > 85.0) and (current_temp >= 30.0) and (rh_drop >= 15.0)
+    # Deteksi kondisi pemicu jamur:
+    # 1. Siklus Lonjakan Siklik: RH pernah > 85%, lalu suhu saat ini >= 30.0°C dan RH turun >= 15%
+    # 2. Kondisi Seketika (Instantaneous High-Risk): Suhu saat ini >= 29.5°C dengan kelembaban saat ini >= 85%
+    #    (uap panas-lembab ekstrim langsung aktif dan terdeteksi meskipun sistem baru menyala / cold start)
+    is_spike = ((max_rh_6h > 85.0) and (current_temp >= 30.0) and (rh_drop >= 15.0)) or (
+        (current_rh >= 85.0) and (current_temp >= 29.5)
+    )
 
     if is_spike:
-        summary = (
-            f"Terdeteksi cuaca 'Habis Hujan/Lembab Langsung Panas'! Kelembapan udara sempat mencapai {max_rh_6h:.0f}% "
-            f"lalu disusul suhu panas {current_temp:.1f}°C. Kondisi ini memicu jamur Karat Putih (Brontok) dalam <24 jam."
-        )
+        if current_rh >= 85.0 and current_temp >= 29.5:
+            summary = (
+                f"Peringatan Cuaca Seketika: Suhu udara panas ({current_temp:.1f}°C) disertai kelembapan jenuh ({current_rh:.0f}%). "
+                "Kondisi panas-lembab ekstrim ini sangat memicu perkecambahan spora jamur Karat Putih (Brontok)."
+            )
+        else:
+            summary = (
+                f"Terdeteksi cuaca 'Habis Hujan/Lembab Langsung Panas'! Kelembapan udara sempat mencapai {max_rh_6h:.0f}% "
+                f"lalu disusul suhu panas {current_temp:.1f}°C. Kondisi ini memicu jamur Karat Putih (Brontok) dalam <24 jam."
+            )
     elif max_rh_6h > 85.0 and current_temp >= 28.5:
         summary = (
             f"Udara sempat sangat lembab ({max_rh_6h:.0f}%) dengan suhu {current_temp:.1f}°C. "
