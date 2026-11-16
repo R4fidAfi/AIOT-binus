@@ -18,8 +18,109 @@
 
   <!-- Styles -->
   <link rel="stylesheet" href="/static/style.css" />
+
+  <script>
+    // Cek otentikasi PIN sebelum render antarmuka untuk mencegah kebocoran visual
+    (function() {
+      try {
+        if (sessionStorage.getItem('ipomoea_pin_auth') === 'granted') {
+          document.documentElement.classList.add('pin-unlocked');
+        }
+      } catch(e) {}
+    })();
+  </script>
 </head>
 <body class="min-h-screen">
+
+  <!-- ================= 6-DIGIT PIN AUTHENTICATION GATEWAY ================= -->
+  <div id="pinAuthOverlay" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 transition-opacity duration-300">
+    <div class="w-full max-w-sm mx-auto space-y-5 text-center">
+      
+      <!-- System Badge & Icon -->
+      <div class="space-y-2">
+        <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-900/60 border border-emerald-500/40 text-emerald-400 shadow-lg shadow-emerald-950/50">
+          <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+        </div>
+        <div>
+          <span class="inline-block px-2.5 py-0.5 text-[10px] font-bold tracking-widest uppercase rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-700/50 font-mono-num">
+            Arduino UNO Q • Secure Edge
+          </span>
+          <h2 class="text-lg font-bold text-white tracking-tight mt-1.5">
+            Ipomoea Edge-AIoT
+          </h2>
+          <p class="text-xs text-slate-400 max-w-[280px] mx-auto mt-0.5">
+            Masukkan 6-digit PIN keamanan untuk membuka akses dashboard pemantauan &amp; inspeksi daun.
+          </p>
+        </div>
+      </div>
+
+      <!-- Invisible Native Input (Untuk Keyboard Fisik Laptop/PC & Auto-Focus) -->
+      <input type="password" id="pinHiddenInput" maxlength="6" inputmode="numeric" pattern="[0-9]*"
+        class="opacity-0 absolute pointer-events-none -z-10" autocomplete="off" />
+
+      <!-- 6-Digit Slot Indicator Boxes -->
+      <div id="pinSlotsContainer" class="flex items-center justify-center gap-2 sm:gap-2.5 py-1">
+        <div class="pin-slot" id="pinSlot0"><span class="pin-slot-dot"></span></div>
+        <div class="pin-slot" id="pinSlot1"><span class="pin-slot-dot"></span></div>
+        <div class="pin-slot" id="pinSlot2"><span class="pin-slot-dot"></span></div>
+        <div class="pin-slot" id="pinSlot3"><span class="pin-slot-dot"></span></div>
+        <div class="pin-slot" id="pinSlot4"><span class="pin-slot-dot"></span></div>
+        <div class="pin-slot" id="pinSlot5"><span class="pin-slot-dot"></span></div>
+      </div>
+
+      <!-- Warning Alert Banner (Muncul saat PIN salah) -->
+      <div id="pinAlertBox" class="hidden p-2.5 rounded-xl bg-rose-950/70 border border-rose-500/50 text-rose-300 text-xs flex items-center justify-center gap-2 shadow-sm animate-fadeIn">
+        <svg class="w-4 h-4 shrink-0 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span id="pinAlertText" class="font-medium">PIN Akses Salah! Silakan coba kembali.</span>
+      </div>
+
+      <!-- Success Banner (Muncul saat PIN benar) -->
+      <div id="pinSuccessBox" class="hidden p-2.5 rounded-xl bg-emerald-950/70 border border-emerald-500/50 text-emerald-300 text-xs flex items-center justify-center gap-2 shadow-sm animate-fadeIn">
+        <svg class="w-4 h-4 shrink-0 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        <span class="font-medium">PIN Terverifikasi! Membuka Dashboard...</span>
+      </div>
+
+      <!-- Touch Numpad Grid (Sangat Nyaman di Layar HP & Tablet) -->
+      <div class="grid grid-cols-3 gap-2 sm:gap-2.5 pt-1">
+        <button type="button" onclick="handlePinNumpad('1')" class="numpad-btn">1</button>
+        <button type="button" onclick="handlePinNumpad('2')" class="numpad-btn">2</button>
+        <button type="button" onclick="handlePinNumpad('3')" class="numpad-btn">3</button>
+        
+        <button type="button" onclick="handlePinNumpad('4')" class="numpad-btn">4</button>
+        <button type="button" onclick="handlePinNumpad('5')" class="numpad-btn">5</button>
+        <button type="button" onclick="handlePinNumpad('6')" class="numpad-btn">6</button>
+        
+        <button type="button" onclick="handlePinNumpad('7')" class="numpad-btn">7</button>
+        <button type="button" onclick="handlePinNumpad('8')" class="numpad-btn">8</button>
+        <button type="button" onclick="handlePinNumpad('9')" class="numpad-btn">9</button>
+        
+        <button type="button" onclick="handlePinClear()" class="numpad-btn numpad-btn-action">
+          HAPUS
+        </button>
+        <button type="button" onclick="handlePinNumpad('0')" class="numpad-btn">0</button>
+        <button type="button" onclick="handlePinBackspace()" class="numpad-btn numpad-btn-action" title="Hapus Satu Digit">
+          <svg class="w-5 h-5 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+            <line x1="18" y1="9" x2="12" y2="15"/>
+            <line x1="12" y1="9" x2="18" y2="15"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Footer Info -->
+      <div class="pt-2 text-[10px] text-slate-500 font-mono-num">
+        PIN Akses Standar: 123456 • Sistem Offline Edge
+      </div>
+
+    </div>
+  </div>
 
   <!-- ================= COMPACT STICKY TOP BAR ================= -->
   <header class="sticky top-0 z-40 surface-header">
@@ -43,7 +144,7 @@
           </div>
         </div>
 
-        <!-- Right: Plant Age Pill + Hardware Status Button -->
+        <!-- Right: Plant Age Pill + Hardware Status Button + Lock Button -->
         <div class="flex items-center gap-1.5 shrink-0">
           <button onclick="openPlantSetupForm()"
             class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200/70 border border-slate-200 text-right transition">
@@ -57,6 +158,14 @@
               <rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>
               <path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/>
               <path d="M20 9h3"/><path d="M20 14h3"/><path d="M1 9h3"/><path d="M1 14h3"/>
+            </svg>
+          </button>
+
+          <button onclick="lockSystem()" title="Kunci Akses Sistem (PIN)"
+            class="p-2 rounded-lg bg-slate-100 hover:bg-slate-200/70 border border-slate-200 text-slate-700 transition">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
             </svg>
           </button>
         </div>

@@ -144,6 +144,13 @@ class InspectionValidationPayload(BaseModel):
     severity_override: Optional[float] = None
 
 
+class PinVerifyPayload(BaseModel):
+    pin: str
+
+
+DEFAULT_SYSTEM_PIN = "123456"
+
+
 def seed_initial_inspections_if_empty() -> None:
     """
     Generate 3 historical dual-surface inspections on first boot so Menu 3 (Riwayat & Tren)
@@ -285,6 +292,23 @@ def serve_web_app() -> FileResponse:
             "Expires": "0",
         },
     )
+
+
+@app.post("/api/v1/auth/verify-pin")
+def api_verify_pin(payload: PinVerifyPayload) -> Dict[str, Any]:
+    """
+    Verifikasi 6-Digit PIN Keamanan untuk Membuka Dashboard Edge Arduino UNO Q.
+    PIN Akses: 123456
+    """
+    clean_pin = payload.pin.strip()
+    if clean_pin == DEFAULT_SYSTEM_PIN:
+        return {
+            "status": "AUTHENTICATED",
+            "valid": True,
+            "message": "PIN valid. Hak akses sistem diberikan.",
+            "server_time": get_wib_now_str(),
+        }
+    raise HTTPException(status_code=401, detail="PIN salah! Kombinasi 6 angka tidak cocok.")
 
 
 @app.get("/api/v1/status")

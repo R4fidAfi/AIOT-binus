@@ -1690,8 +1690,200 @@ async function testLedRing(state) {
   }
 }
 
+/* ================= 6-DIGIT PIN AUTHENTICATION GATEWAY ================= */
+const PIN_STATE = {
+  entered: '',
+  isSubmitting: false,
+  targetPin: '123456',
+};
+
+function isSystemUnlocked() {
+  return document.documentElement.classList.contains('pin-unlocked');
+}
+
+function updatePinSlotsUI() {
+  for (let i = 0; i < 6; i++) {
+    const slot = document.getElementById(`pinSlot${i}`);
+    if (!slot) continue;
+    slot.classList.remove('filled', 'active', 'error', 'success');
+    if (i < PIN_STATE.entered.length) {
+      slot.classList.add('filled');
+    } else if (i === PIN_STATE.entered.length) {
+      slot.classList.add('active');
+    }
+  }
+}
+
+function clearPinAlert() {
+  const alertBox = document.getElementById('pinAlertBox');
+  const successBox = document.getElementById('pinSuccessBox');
+  if (alertBox) alertBox.classList.add('hidden');
+  if (successBox) successBox.classList.add('hidden');
+  for (let i = 0; i < 6; i++) {
+    const slot = document.getElementById(`pinSlot${i}`);
+    if (slot) slot.classList.remove('error', 'success');
+  }
+}
+
+function handlePinNumpad(digit) {
+  if (PIN_STATE.isSubmitting || isSystemUnlocked()) return;
+  if (PIN_STATE.entered.length >= 6) return;
+  
+  clearPinAlert();
+  PIN_STATE.entered += String(digit);
+  updatePinSlotsUI();
+
+  if (PIN_STATE.entered.length === 6) {
+    verifyEnteredPin();
+  }
+}
+
+function handlePinBackspace() {
+  if (PIN_STATE.isSubmitting || isSystemUnlocked()) return;
+  if (PIN_STATE.entered.length === 0) return;
+  
+  clearPinAlert();
+  PIN_STATE.entered = PIN_STATE.entered.slice(0, -1);
+  updatePinSlotsUI();
+}
+
+function handlePinClear() {
+  if (PIN_STATE.isSubmitting || isSystemUnlocked()) return;
+  clearPinAlert();
+  PIN_STATE.entered = '';
+  updatePinSlotsUI();
+}
+
+async function verifyEnteredPin() {
+  if (PIN_STATE.entered.length !== 6 || PIN_STATE.isSubmitting) return;
+  PIN_STATE.isSubmitting = true;
+
+  const alertBox = document.getElementById('pinAlertBox');
+  const alertText = document.getElementById('pinAlertText');
+  const successBox = document.getElementById('pinSuccessBox');
+  const slotsContainer = document.getElementById('pinSlotsContainer');
+
+  let isValid = false;
+
+  try {
+    const res = await fetch('/api/v1/auth/verify-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: PIN_STATE.entered }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.valid) isValid = true;
+    }
+  } catch (netErr) {
+    // Offline resilience: Verifikasi mandiri di client jika koneksi backend lambat
+    if (PIN_STATE.entered === PIN_STATE.targetPin) {
+      isValid = true;
+    }
+  }
+
+  if (isValid) {
+    // Tanda Sukses
+    for (let i = 0; i < 6; i++) {
+      const slot = document.getElementById(`pinSlot${i}`);
+      if (slot) slot.classList.add('success');
+    }
+    if (successBox) successBox.classList.remove('hidden');
+
+    try {
+      sessionStorage.setItem('ipomoea_pin_auth', 'granted');
+    } catch (e) {}
+
+    setTimeout(() => {
+      document.documentElement.classList.add('pin-unlocked');
+      const overlay = document.getElementById('pinAuthOverlay');
+      if (overlay) {
+        overlay.classList.add('opacity-0', 'pointer-events-none');
+        setTimeout(() => {
+          overlay.style.display = 'none';
+        }, 300);
+      }
+      PIN_STATE.entered = '';
+      PIN_STATE.isSubmitting = false;
+      showToast('Akses Terverifikasi. Selamat datang di Ipomoea Edge-AIoT.');
+    }, 450);
+  } else {
+    // Tanda Peringatan / Salah
+    if (navigator.vibrate) {
+      navigator.vibrate([100, 50, 100]);
+    }
+    for (let i = 0; i < 6; i++) {
+      const slot = document.getElementById(`pinSlot${i}`);
+      if (slot) slot.classList.add('error');
+    }
+    if (slotsContainer) {
+      slotsContainer.classList.add('pin-shake');
+      setTimeout(() => slotsContainer.classList.remove('pin-shake'), 450);
+    }
+    if (alertBox) {
+      if (alertText) alertText.textContent = 'PIN Akses Salah! Kombinasi 6 angka tidak cocok.';
+      alertBox.classList.remove('hidden');
+    }
+
+    setTimeout(() => {
+      PIN_STATE.entered = '';
+      PIN_STATE.isSubmitting = false;
+      updatePinSlotsUI();
+    }, 850);
+  }
+}
+
+function lockSystem() {
+  try {
+    sessionStorage.removeItem('ipomoea_pin_auth');
+  } catch (e) {}
+
+  document.documentElement.classList.remove('pin-unlocked');
+  const overlay = document.getElementById('pinAuthOverlay');
+  if (overlay) {
+    overlay.style.display = 'flex';
+    overlay.classList.remove('opacity-0', 'pointer-events-none', 'hidden');
+  }
+  PIN_STATE.entered = '';
+  PIN_STATE.isSubmitting = false;
+  clearPinAlert();
+  updatePinSlotsUI();
+  showToast('Sistem telah dikunci. Masukkan PIN untuk mengakses kembali.');
+}
+
+// Global Keyboard Listener untuk Mengetik Menggunakan Keyboard Laptop / PC
+window.addEventListener('keydown', (e) => {
+  if (isSystemUnlocked()) return;
+
+  if (e.key >= '0' && e.key <= '9') {
+    e.preventDefault();
+    handlePinNumpad(e.key);
+  } else if (e.key === 'Backspace') {
+    e.preventDefault();
+    handlePinBackspace();
+  } else if (e.key === 'Escape' || e.key === 'Delete') {
+    e.preventDefault();
+    handlePinClear();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (PIN_STATE.entered.length === 6) {
+      verifyEnteredPin();
+    }
+  }
+});
+
 /* ================= INITIALIZE ON PAGE LOAD ================= */
 window.addEventListener('DOMContentLoaded', async () => {
+  // 0. Cek otentikasi PIN
+  if (sessionStorage.getItem('ipomoea_pin_auth') === 'granted') {
+    document.documentElement.classList.add('pin-unlocked');
+    const overlay = document.getElementById('pinAuthOverlay');
+    if (overlay) overlay.style.display = 'none';
+  } else {
+    document.documentElement.classList.remove('pin-unlocked');
+    updatePinSlotsUI();
+  }
+
   // 1. Mulai jam real-time Kota Tangerang (WIB / UTC+7) berdetak setiap detik
   updateTangerangLiveClock();
   setInterval(updateTangerangLiveClock, 1000);

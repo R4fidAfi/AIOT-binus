@@ -333,3 +333,148 @@ body {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* ================= 6-DIGIT PIN AUTHENTICATION GATEWAY ================= */
+html.pin-unlocked #pinAuthOverlay {
+  display: none !important;
+}
+
+@keyframes pinShake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-9px); }
+  40%, 80% { transform: translateX(9px); }
+}
+
+.pin-shake {
+  animation: pinShake 0.4s ease-in-out;
+}
+
+@keyframes pinSuccessPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.pin-success-pulse {
+  animation: pinSuccessPulse 0.35s ease-out;
+}
+
+.pin-slot {
+  width: 44px;
+  height: 52px;
+  border-radius: 12px;
+  background-color: rgba(15, 23, 42, 0.7);
+  border: 1.5px solid rgba(148, 163, 184, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #f8fafc;
+  user-select: none;
+  position: relative;
+}
+
+@media (min-width: 640px) {
+  .pin-slot {
+    width: 48px;
+    height: 58px;
+    font-size: 1.5rem;
+  }
+}
+
+.pin-slot.filled {
+  border-color: #10b981;
+  background-color: rgba(6, 78, 59, 0.35);
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.3);
+  color: #34d399;
+}
+
+.pin-slot.active {
+  border-color: #34d399;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
+}
+
+.pin-slot.error {
+  border-color: #f43f5e !important;
+  background-color: rgba(136, 19, 55, 0.35) !important;
+  box-shadow: 0 0 16px rgba(244, 63, 94, 0.4) !important;
+  color: #fb7185 !important;
+}
+
+.pin-slot.success {
+  border-color: #10b981 !important;
+  background-color: rgba(5, 150, 105, 0.35) !important;
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.5) !important;
+  color: #6ee7b7 !important;
+}
+
+.pin-slot-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background-color: rgba(148, 163, 184, 0.3);
+  transition: all 0.15s ease;
+}
+
+.pin-slot.filled .pin-slot-dot {
+  width: 12px;
+  height: 12px;
+  background-color: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}
+
+.pin-slot.error .pin-slot-dot {
+  background-color: #f43f5e;
+  box-shadow: 0 0 8px #f43f5e;
+}
+
+.numpad-btn {
+  height: 56px;
+  border-radius: 16px;
+  background-color: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(100, 116, 139, 0.22);
+  color: #f8fafc;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.35rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: pointer;
+}
+
+@media (min-width: 640px) {
+  .numpad-btn {
+    height: 60px;
+    font-size: 1.45rem;
+  }
+}
+
+.numpad-btn:hover {
+  background-color: rgba(51, 65, 85, 0.9);
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+.numpad-btn:active {
+  transform: scale(0.92);
+  background-color: rgba(16, 185, 129, 0.25);
+  border-color: #10b981;
+}
+
+.numpad-btn-action {
+  font-size: 0.8rem;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  color: #94a3b8;
+  letter-spacing: 0.02em;
+}
+
+.numpad-btn-action:hover {
+  color: #f8fafc;
+}
