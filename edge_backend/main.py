@@ -18,6 +18,7 @@ from .ai_inference import vision_pipeline
 from .camera_service import (
     CAPTURE_DIR,
     capture_leaf_surface,
+    is_physical_camera_connected,
     rig_bridge,
     webcam_controller,
 )
@@ -324,6 +325,24 @@ def api_get_status() -> Dict[str, Any]:
     )
     hst_info = get_hst_phase_info(settings["active_hst"])
 
+    # Calculate ESP32 connection freshness (heartbeat threshold: 15 seconds)
+    esp32_online = False
+    esp32_age_sec = 999999.0
+    last_seen_str = settings.get("esp32_last_seen") or telemetry.get("timestamp")
+    if last_seen_str:
+        try:
+            ts_clean = str(last_seen_str).replace("T", " ").split(".")[0]
+            last_dt = datetime.strptime(ts_clean, "%Y-%m-%d %H:%M:%S")
+            now_dt = datetime.now()
+            esp32_age_sec = max(0.0, (now_dt - last_dt).total_seconds())
+            if esp32_age_sec <= 15.0:
+                esp32_online = True
+        except Exception:
+            pass
+
+    # Check physical webcam hardware detection
+    webcam_connected = is_physical_camera_connected()
+
     return {
         "status": "OK",
         "server_time": get_wib_now_str(),
@@ -347,7 +366,11 @@ def api_get_status() -> Dict[str, Any]:
             "led_ring_state": rig_bridge.led_on,
             "led_pwm": settings["led_brightness_pwm"],
             "esp32_node": telemetry.get("node_id", "ESP32-FIELD-01"),
-            "esp32_last_seen": settings.get("esp32_last_seen") or telemetry["timestamp"],
+            "esp32_last_seen": last_seen_str,
+            "esp32_online": esp32_online,
+            "esp32_age_sec": round(esp32_age_sec, 1),
+            "webcam_connected": webcam_connected,
+            "webcam_source_mode": webcam_controller.last_source_mode,
             "flip_stage": "Matte-Black In-Situ Flip-Stage (20 cm Working Distance)",
         },
     }
@@ -487,14 +510,10 @@ async def api_capture_leaf_side(
             uploaded_bytes=uploaded_bytes,
         )
     except Exception as exc:
-        print(f"[CAPTURE_FALLBACK_TRIGGERED] Error: {exc}", flush=True)
-        abs_path, url_path, meta = capture_leaf_surface(
-            side=side_norm,
-            variety=active_variety,
-            scenario=active_scenario,
-            hst=active_hst,
-            soil_moisture=float(telemetry["soil_moisture"]),
-            prefer_simulation=True,
+        print(f"[CAPTURE_REJECTED] Error: {exc}", flush=True)
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc)
         )
 
     if side_norm == "top":

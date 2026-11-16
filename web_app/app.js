@@ -209,93 +209,216 @@ function renderHeaderAndSettings(data) {
   if (sumAge) sumAge.textContent = `Umur ${ageDays} Hari (${phaseShort})`;
   if (sumPlot) sumPlot.textContent = `Lokasi: ${farm.plot_name || 'Petak Sampel Utama'} • Mulai Tanam: ${farm.planting_date || '-'}`;
 
-  const tempNum = Number(tel.temperature || 28.8);
-  const rhNum = Number(tel.humidity || 73.0);
-  const soilNum = Number(tel.soil_moisture || 62.0);
+  const hw = data.hardware || {};
+  APP_STATE.hardware = hw;
+  const isEsp32Online = Boolean(hw.esp32_online);
+  const isWebcamConnected = Boolean(hw.webcam_connected);
 
+  // Transition toast alerts
+  if (APP_STATE._lastEsp32Online !== undefined) {
+    if (!APP_STATE._lastEsp32Online && isEsp32Online) {
+      showToast('Node Sensor ESP32S3 Terhubung! Menerima telemetri real-time.');
+    } else if (APP_STATE._lastEsp32Online && !isEsp32Online) {
+      showToast('Node Sensor ESP32S3 Terputus! Memeriksa koneksi sensor...');
+    }
+  }
+  APP_STATE._lastEsp32Online = isEsp32Online;
+
+  if (APP_STATE._lastWebcamConnected !== undefined) {
+    if (!APP_STATE._lastWebcamConnected && isWebcamConnected) {
+      showToast('Webcam USB Terdeteksi & Siap Digunakan!');
+      renderSingleCameraUI();
+    } else if (APP_STATE._lastWebcamConnected && !isWebcamConnected) {
+      showToast('Webcam USB Terputus! Harap periksa kabel kamera.');
+      renderSingleCameraUI();
+    }
+  }
+  APP_STATE._lastWebcamConnected = isWebcamConnected;
+
+  // Sync Hardware Modal elements
+  const hwEsp32LastSeen = document.getElementById('hwEsp32LastSeen');
+  if (hwEsp32LastSeen) {
+    if (isEsp32Online) {
+      hwEsp32LastSeen.textContent = 'Online • Transmisi Aktif';
+      hwEsp32LastSeen.className = 'font-mono-num font-medium text-emerald-700';
+    } else {
+      const lastStr = hw.esp32_last_seen ? formatWibTimeOnly(hw.esp32_last_seen) : 'Belum Ada Data';
+      hwEsp32LastSeen.textContent = `Offline (Terakhir ${lastStr})`;
+      hwEsp32LastSeen.className = 'font-mono-num font-medium text-rose-600';
+    }
+  }
+
+  const hwWebcamStatus = document.getElementById('hwWebcamStatus');
+  if (hwWebcamStatus) {
+    if (isWebcamConnected) {
+      hwWebcamStatus.textContent = 'Terhubung (Siap Digunakan)';
+      hwWebcamStatus.className = 'font-medium text-emerald-700';
+    } else {
+      hwWebcamStatus.textContent = 'Tidak Terdeteksi / Terputus';
+      hwWebcamStatus.className = 'font-medium text-rose-600';
+    }
+  }
+
+  const sensorDot = document.getElementById('sensorLiveDot');
   const sensorTimeEl = document.getElementById('barSensorTime');
-  if (sensorTimeEl) {
-    const rawTime = (tel.timestamp || data.server_time || '');
-    sensorTimeEl.textContent = rawTime ? `Update Sensor: ${formatWibTimeOnly(rawTime)} WIB` : 'Live • ESP32';
-  }
+  const esp32AlertBanner = document.getElementById('esp32OfflineBanner');
 
-  // 1. Suhu Udara
-  document.getElementById('barTemp').textContent = `${tempNum.toFixed(1)} °C`;
-  const barTempSub = document.getElementById('barTempSub');
-  const barTempBox = document.getElementById('barTempBox');
-  if (tempNum > 31.0) {
+  if (!isEsp32Online) {
+    // Mode Offline ESP32: Tampilkan tanda strip tanpa angka palsu
+    if (sensorDot) {
+      sensorDot.className = 'w-2 h-2 rounded-full bg-rose-500 animate-pulse';
+    }
+    if (sensorTimeEl) {
+      const lastSeen = hw.esp32_last_seen ? formatWibTimeOnly(hw.esp32_last_seen) : '-';
+      sensorTimeEl.innerHTML = `<span class="text-rose-400 font-semibold">Node Terputus</span> <span class="text-slate-400 text-[10px]">(Terakhir ${lastSeen})</span>`;
+    }
+    if (esp32AlertBanner) {
+      esp32AlertBanner.classList.remove('hidden');
+    }
+
+    const barTemp = document.getElementById('barTemp');
+    const barTempSub = document.getElementById('barTempSub');
+    const barTempBox = document.getElementById('barTempBox');
+    if (barTemp) barTemp.textContent = '-- °C';
     if (barTempSub) {
-      barTempSub.textContent = 'Panas Terik';
-      barTempSub.className = 'text-[9px] text-amber-300 font-semibold truncate';
+      barTempSub.textContent = 'Sensor Offline';
+      barTempSub.className = 'text-[9px] text-slate-400 font-medium truncate';
     }
-    if (barTempBox) barTempBox.className = 'realtime-tile realtime-tile-warn px-2 py-1.5';
-  } else {
-    if (barTempSub) {
-      barTempSub.textContent = 'Normal';
-      barTempSub.className = 'text-[9px] text-emerald-400 font-medium truncate';
-    }
-    if (barTempBox) barTempBox.className = 'realtime-tile px-2 py-1.5';
-  }
+    if (barTempBox) barTempBox.className = 'realtime-tile opacity-60 px-2 py-1.5';
 
-  // 2. Lembab Udara
-  document.getElementById('barHumidity').textContent = `${rhNum.toFixed(0)} %`;
-  const barHumiditySub = document.getElementById('barHumiditySub');
-  const barHumidityBox = document.getElementById('barHumidityBox');
-  if (rhNum >= 85.0) {
+    const barHumidity = document.getElementById('barHumidity');
+    const barHumiditySub = document.getElementById('barHumiditySub');
+    const barHumidityBox = document.getElementById('barHumidityBox');
+    if (barHumidity) barHumidity.textContent = '-- %';
     if (barHumiditySub) {
-      barHumiditySub.textContent = 'Sangat Lembab';
-      barHumiditySub.className = 'text-[9px] text-sky-300 font-semibold truncate';
+      barHumiditySub.textContent = 'Sensor Offline';
+      barHumiditySub.className = 'text-[9px] text-slate-400 font-medium truncate';
     }
-    if (barHumidityBox) barHumidityBox.className = 'realtime-tile realtime-tile-alert px-2 py-1.5';
-  } else {
-    if (barHumiditySub) {
-      barHumiditySub.textContent = 'Ideal';
-      barHumiditySub.className = 'text-[9px] text-emerald-400 font-medium truncate';
-    }
-    if (barHumidityBox) barHumidityBox.className = 'realtime-tile px-2 py-1.5';
-  }
+    if (barHumidityBox) barHumidityBox.className = 'realtime-tile opacity-60 px-2 py-1.5';
 
-  // 3. Lembab Tanah
-  const barSoilEl = document.getElementById('barSoil');
-  const barSoilSub = document.getElementById('barSoilSub');
-  const barSoilBox = document.getElementById('barSoilBox');
-  barSoilEl.textContent = `${soilNum.toFixed(0)} %`;
-  if (soilNum < 35.0) {
-    barSoilEl.className = 'text-xs sm:text-sm font-bold font-mono-num text-amber-300 mt-0.5';
+    const barSoilEl = document.getElementById('barSoil');
+    const barSoilSub = document.getElementById('barSoilSub');
+    const barSoilBox = document.getElementById('barSoilBox');
+    if (barSoilEl) barSoilEl.textContent = '-- %';
     if (barSoilSub) {
-      barSoilSub.textContent = 'Tanah Kering!';
-      barSoilSub.className = 'text-[9px] text-amber-300 font-semibold truncate';
+      barSoilSub.textContent = 'Sensor Offline';
+      barSoilSub.className = 'text-[9px] text-slate-400 font-medium truncate';
     }
-    if (barSoilBox) barSoilBox.className = 'realtime-tile realtime-tile-warn px-2 py-1.5';
-  } else {
-    barSoilEl.className = 'text-xs sm:text-sm font-bold font-mono-num text-white mt-0.5';
-    if (barSoilSub) {
-      barSoilSub.textContent = 'Cukup Air';
-      barSoilSub.className = 'text-[9px] text-emerald-400 font-medium truncate';
-    }
-    if (barSoilBox) barSoilBox.className = 'realtime-tile px-2 py-1.5';
-  }
+    if (barSoilBox) barSoilBox.className = 'realtime-tile opacity-60 px-2 py-1.5';
 
-  // 4. Kondisi Cuaca
-  const barSpikeEl = document.getElementById('barSpikeStatus');
-  const barSpikeSub = document.getElementById('barSpikeSub');
-  const barWeatherBox = document.getElementById('barWeatherBox');
-  if (radar.is_spike) {
-    barSpikeEl.textContent = 'Waspada';
-    barSpikeEl.className = 'text-xs sm:text-sm font-bold text-sky-300 truncate mt-0.5';
+    const barSpikeEl = document.getElementById('barSpikeStatus');
+    const barSpikeSub = document.getElementById('barSpikeSub');
+    const barWeatherBox = document.getElementById('barWeatherBox');
+    if (barSpikeEl) barSpikeEl.textContent = 'Standby';
     if (barSpikeSub) {
-      barSpikeSub.textContent = 'Hujan ke Panas';
-      barSpikeSub.className = 'text-[9px] text-sky-300 font-semibold truncate';
+      barSpikeSub.textContent = 'Menunggu ESP32';
+      barSpikeSub.className = 'text-[9px] text-slate-400 font-medium truncate';
     }
-    if (barWeatherBox) barWeatherBox.className = 'realtime-tile realtime-tile-alert px-2 py-1.5';
+    if (barWeatherBox) barWeatherBox.className = 'realtime-tile opacity-60 px-2 py-1.5';
+
   } else {
-    barSpikeEl.textContent = 'Stabil';
-    barSpikeEl.className = 'text-xs sm:text-sm font-bold text-white truncate mt-0.5';
-    if (barSpikeSub) {
-      barSpikeSub.textContent = 'Cuaca Aman';
-      barSpikeSub.className = 'text-[9px] text-emerald-400 font-medium truncate';
+    // Mode Online ESP32: Tampilkan data aktual secara real-time
+    if (sensorDot) {
+      sensorDot.className = 'live-dot';
     }
-    if (barWeatherBox) barWeatherBox.className = 'realtime-tile px-2 py-1.5';
+    if (sensorTimeEl) {
+      const rawTime = (tel.timestamp || data.server_time || '');
+      sensorTimeEl.textContent = rawTime ? `Update: ${formatWibTimeOnly(rawTime)} WIB` : 'Live • ESP32';
+    }
+    if (esp32AlertBanner) {
+      esp32AlertBanner.classList.add('hidden');
+    }
+
+    const tempNum = Number(tel.temperature);
+    const rhNum = Number(tel.humidity);
+    const soilNum = Number(tel.soil_moisture);
+
+    // 1. Suhu Udara
+    const barTemp = document.getElementById('barTemp');
+    const barTempSub = document.getElementById('barTempSub');
+    const barTempBox = document.getElementById('barTempBox');
+    if (barTemp) barTemp.textContent = `${tempNum.toFixed(1)} °C`;
+    if (tempNum > 31.0) {
+      if (barTempSub) {
+        barTempSub.textContent = 'Panas Terik';
+        barTempSub.className = 'text-[9px] text-amber-300 font-semibold truncate';
+      }
+      if (barTempBox) barTempBox.className = 'realtime-tile realtime-tile-warn px-2 py-1.5';
+    } else {
+      if (barTempSub) {
+        barTempSub.textContent = 'Normal';
+        barTempSub.className = 'text-[9px] text-emerald-400 font-medium truncate';
+      }
+      if (barTempBox) barTempBox.className = 'realtime-tile px-2 py-1.5';
+    }
+
+    // 2. Lembab Udara
+    const barHumidity = document.getElementById('barHumidity');
+    const barHumiditySub = document.getElementById('barHumiditySub');
+    const barHumidityBox = document.getElementById('barHumidityBox');
+    if (barHumidity) barHumidity.textContent = `${rhNum.toFixed(0)} %`;
+    if (rhNum >= 85.0) {
+      if (barHumiditySub) {
+        barHumiditySub.textContent = 'Sangat Lembab';
+        barHumiditySub.className = 'text-[9px] text-sky-300 font-semibold truncate';
+      }
+      if (barHumidityBox) barHumidityBox.className = 'realtime-tile realtime-tile-alert px-2 py-1.5';
+    } else {
+      if (barHumiditySub) {
+        barHumiditySub.textContent = 'Ideal';
+        barHumiditySub.className = 'text-[9px] text-emerald-400 font-medium truncate';
+      }
+      if (barHumidityBox) barHumidityBox.className = 'realtime-tile px-2 py-1.5';
+    }
+
+    // 3. Lembab Tanah
+    const barSoilEl = document.getElementById('barSoil');
+    const barSoilSub = document.getElementById('barSoilSub');
+    const barSoilBox = document.getElementById('barSoilBox');
+    if (barSoilEl) {
+      barSoilEl.textContent = `${soilNum.toFixed(0)} %`;
+      if (soilNum < 35.0) {
+        barSoilEl.className = 'text-xs sm:text-sm font-bold font-mono-num text-amber-300 mt-0.5';
+        if (barSoilSub) {
+          barSoilSub.textContent = 'Tanah Kering!';
+          barSoilSub.className = 'text-[9px] text-amber-300 font-semibold truncate';
+        }
+        if (barSoilBox) barSoilBox.className = 'realtime-tile realtime-tile-warn px-2 py-1.5';
+      } else {
+        barSoilEl.className = 'text-xs sm:text-sm font-bold font-mono-num text-white mt-0.5';
+        if (barSoilSub) {
+          barSoilSub.textContent = 'Cukup Air';
+          barSoilSub.className = 'text-[9px] text-emerald-400 font-medium truncate';
+        }
+        if (barSoilBox) barSoilBox.className = 'realtime-tile px-2 py-1.5';
+      }
+    }
+
+    // 4. Kondisi Cuaca
+    const barSpikeEl = document.getElementById('barSpikeStatus');
+    const barSpikeSub = document.getElementById('barSpikeSub');
+    const barWeatherBox = document.getElementById('barWeatherBox');
+    if (radar.is_spike) {
+      if (barSpikeEl) {
+        barSpikeEl.textContent = 'Waspada';
+        barSpikeEl.className = 'text-xs sm:text-sm font-bold text-sky-300 truncate mt-0.5';
+      }
+      if (barSpikeSub) {
+        barSpikeSub.textContent = 'Hujan ke Panas';
+        barSpikeSub.className = 'text-[9px] text-sky-300 font-semibold truncate';
+      }
+      if (barWeatherBox) barWeatherBox.className = 'realtime-tile realtime-tile-alert px-2 py-1.5';
+    } else {
+      if (barSpikeEl) {
+        barSpikeEl.textContent = 'Stabil';
+        barSpikeEl.className = 'text-xs sm:text-sm font-bold text-white truncate mt-0.5';
+      }
+      if (barSpikeSub) {
+        barSpikeSub.textContent = 'Cuaca Aman';
+        barSpikeSub.className = 'text-[9px] text-emerald-400 font-medium truncate';
+      }
+      if (barWeatherBox) barWeatherBox.className = 'realtime-tile px-2 py-1.5';
+    }
   }
 
   const plotInput = document.getElementById('setPlotName');
@@ -681,6 +804,49 @@ function renderSingleCameraUI() {
     setElementVisibility(singleStage, false);
     setElementVisibility(dualResultStage, true);
   }
+
+  // Validasi & Kunci Tombol berdasarkan Status Fisik Webcam USB
+  const btnTurnOnCamera = document.getElementById('btnTurnOnCamera');
+  const btnSingleCapture = document.getElementById('btnSingleCapture');
+  const isWebcamConnected = Boolean(APP_STATE.hardware && APP_STATE.hardware.webcam_connected);
+
+  if (!isWebcamConnected) {
+    if (btnTurnOnCamera) {
+      btnTurnOnCamera.className = 'w-full py-2.5 px-4 rounded-lg bg-slate-800 text-slate-400 font-semibold text-xs flex items-center justify-center gap-2 border border-slate-700/60 shadow-none transition';
+      if (btnTurnOnLabel && (phase === 'TOP_STANDBY' || phase === 'BOTTOM_STANDBY')) {
+        btnTurnOnLabel.textContent = 'Webcam USB Belum Terpasang (Periksa Kabel)';
+      }
+    }
+    if (btnSingleCapture) {
+      btnSingleCapture.disabled = true;
+      btnSingleCapture.className = 'col-span-2 py-2.5 px-4 rounded-lg bg-slate-600 text-slate-300 font-semibold text-xs flex items-center justify-center gap-2 cursor-not-allowed opacity-60 shadow-none';
+      if (captureLabel && (phase === 'TOP_LIVE' || phase === 'BOTTOM_LIVE')) {
+        captureLabel.textContent = 'Webcam Tidak Terhubung (Foto Dinonaktifkan)';
+      }
+    }
+    if (phTitle && (phase === 'TOP_STANDBY' || phase === 'BOTTOM_STANDBY')) {
+      phTitle.textContent = 'Webcam USB Tidak Terdeteksi / Terputus';
+      if (phSub) phSub.textContent = 'Harap tancapkan kabel webcam USB ke port USB Arduino UNO Q sebelum mengambil foto.';
+    }
+  } else {
+    if (btnTurnOnCamera) {
+      btnTurnOnCamera.className = 'w-full py-2.5 px-4 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-[0.99]';
+      if (btnTurnOnLabel) {
+        btnTurnOnLabel.textContent = phase === 'TOP_STANDBY'
+          ? 'Nyalakan Kamera (Bagian Atas Daun)'
+          : 'Nyalakan Kamera (Bagian Bawah Daun)';
+      }
+    }
+    if (btnSingleCapture) {
+      btnSingleCapture.disabled = false;
+      btnSingleCapture.className = 'col-span-2 py-2.5 px-4 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-[0.99]';
+      if (captureLabel) {
+        captureLabel.textContent = phase === 'TOP_LIVE'
+          ? 'Ambil Foto Daun Atas'
+          : 'Ambil Foto Daun Bawah';
+      }
+    }
+  }
 }
 
 function triggerSingleFlash() {
@@ -692,6 +858,9 @@ function triggerSingleFlash() {
 }
 
 async function startLiveWebcam() {
+  if (APP_STATE.hardware && !APP_STATE.hardware.webcam_connected) {
+    showToast('Peringatan: Webcam USB tidak terdeteksi! Harap tancapkan kabel USB kamera.');
+  }
   const isTop = APP_STATE.capturePhase === 'TOP_STANDBY';
   const side = isTop ? 'top' : 'bottom';
   try {
@@ -728,6 +897,10 @@ async function stopLiveWebcamToStandby(silent = false) {
 }
 
 async function handleSingleFrameCapture() {
+  if (APP_STATE.hardware && !APP_STATE.hardware.webcam_connected) {
+    showToast('Gagal: Webcam USB fisik tidak terdeteksi! Harap hubungkan webcam terlebih dahulu.');
+    return;
+  }
   const isTop = APP_STATE.capturePhase === 'TOP_LIVE' || APP_STATE.capturePhase === 'TOP_STANDBY';
   const side = isTop ? 'top' : 'bottom';
   triggerSingleFlash();
@@ -739,9 +912,16 @@ async function handleSingleFrameCapture() {
       body: formData,
     });
     if (!res.ok) {
-      const errBody = await res.text();
-      console.error(`Capture HTTP error ${res.status}:`, errBody);
-      throw new Error(`HTTP ${res.status}`);
+      let errDetail = 'Gagal mengambil foto dari kamera.';
+      try {
+        const errJson = await res.json();
+        if (errJson.detail) errDetail = errJson.detail;
+      } catch (e) {
+        errDetail = await res.text();
+      }
+      console.error(`Capture HTTP error ${res.status}:`, errDetail);
+      showToast(errDetail);
+      return;
     }
     const data = await res.json();
     const cacheBusted = `${data.image_url}?t=${Date.now()}`;
@@ -1045,33 +1225,63 @@ async function loadTelemetryAndChart() {
     const hstInfo = data.hst_info || {};
     const history = data.history || [];
 
-    const soil = Number(latest.soil_moisture || 62.0);
+    const isEsp32Online = Boolean(APP_STATE.hardware && APP_STATE.hardware.esp32_online);
     const soilValEl = document.getElementById('landSoilValue');
     const soilBadge = document.getElementById('landSoilBadge');
     const soilProg = document.getElementById('landSoilProgress');
     const soilStatus = document.getElementById('landSoilStatusText');
 
-    soilValEl.textContent = `${soil.toFixed(0)}%`;
-    soilProg.style.width = `${Math.min(100, Math.max(5, soil))}%`;
-
-    if (soil < 35.0) {
-      soilProg.className = 'h-full bg-amber-500 transition-all duration-500';
-      soilBadge.textContent = 'PERLU DISIRAM';
-      soilBadge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase status-pill-WARNING_WATER';
-      soilStatus.className = 'text-xs font-semibold text-amber-800 pt-0.5';
-      soilStatus.textContent = 'Tanah kering (<35%). Segera siram air, jangan semprot pestisida.';
-    } else if (soil <= 75.0) {
-      soilProg.className = 'h-full bg-emerald-700 transition-all duration-500';
-      soilBadge.textContent = 'CUKUP AIR';
-      soilBadge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase status-pill-SAFE';
-      soilStatus.className = 'text-xs font-medium text-slate-700 pt-0.5';
-      soilStatus.textContent = 'Tanah cukup lembab. Tanaman tidak kekurangan air.';
+    if (!isEsp32Online) {
+      if (soilValEl) soilValEl.textContent = '--%';
+      if (soilProg) {
+        soilProg.style.width = '0%';
+        soilProg.className = 'h-full bg-slate-400';
+      }
+      if (soilBadge) {
+        soilBadge.textContent = 'SENSOR OFFLINE';
+        soilBadge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600 border border-slate-300';
+      }
+      if (soilStatus) {
+        soilStatus.className = 'text-xs font-semibold text-slate-500 pt-0.5';
+        soilStatus.textContent = 'Node sensor ESP32 terputus atau belum mengirimkan data. Menunggu transmisi...';
+      }
     } else {
-      soilProg.className = 'h-full bg-sky-700 transition-all duration-500';
-      soilBadge.textContent = 'SANGAT BASAH';
-      soilBadge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase status-pill-INFO_WEATHER';
-      soilStatus.className = 'text-xs font-medium text-slate-700 pt-0.5';
-      soilStatus.textContent = 'Tanah sudah sangat basah. Tunda penyiraman berikutnya.';
+      const soil = Number(latest.soil_moisture || 0.0);
+      if (soilValEl) soilValEl.textContent = `${soil.toFixed(0)}%`;
+      if (soilProg) {
+        soilProg.style.width = `${Math.min(100, Math.max(5, soil))}%`;
+        if (soil < 35.0) {
+          soilProg.className = 'h-full bg-amber-500 transition-all duration-500';
+          if (soilBadge) {
+            soilBadge.textContent = 'PERLU DISIRAM';
+            soilBadge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase status-pill-WARNING_WATER';
+          }
+          if (soilStatus) {
+            soilStatus.className = 'text-xs font-semibold text-amber-800 pt-0.5';
+            soilStatus.textContent = 'Tanah kering (<35%). Segera siram air, jangan semprot pestisida.';
+          }
+        } else if (soil <= 75.0) {
+          soilProg.className = 'h-full bg-emerald-700 transition-all duration-500';
+          if (soilBadge) {
+            soilBadge.textContent = 'CUKUP AIR';
+            soilBadge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase status-pill-SAFE';
+          }
+          if (soilStatus) {
+            soilStatus.className = 'text-xs font-medium text-slate-700 pt-0.5';
+            soilStatus.textContent = 'Tanah cukup lembab. Tanaman tidak kekurangan air.';
+          }
+        } else {
+          soilProg.className = 'h-full bg-sky-700 transition-all duration-500';
+          if (soilBadge) {
+            soilBadge.textContent = 'SANGAT BASAH';
+            soilBadge.className = 'inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase status-pill-INFO_WEATHER';
+          }
+          if (soilStatus) {
+            soilStatus.className = 'text-xs font-medium text-slate-700 pt-0.5';
+            soilStatus.textContent = 'Tanah sudah sangat basah. Tunda penyiraman berikutnya.';
+          }
+        }
+      }
     }
 
     document.getElementById('landHstTag').textContent = `Umur ${hstInfo.hst || 16} Hari (${hstInfo.phase_short || ''})`;

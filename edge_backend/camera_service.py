@@ -837,6 +837,52 @@ class OnDemandWebcamController:
 
 webcam_controller = OnDemandWebcamController()
 
+_last_webcam_probe_time: float = 0.0
+_last_webcam_probe_result: bool = False
+
+
+def is_physical_camera_connected() -> bool:
+    """
+    Checks if a real physical USB webcam is connected and detected by the OS.
+    On Linux (Arduino UNO Q): Inspects /sys/class/video4linux/video* for real UVC USB devices.
+    On Windows (PC/laptop): Probes candidate camera handles with low-overhead caching.
+    """
+    global _last_webcam_probe_time, _last_webcam_probe_result
+    if webcam_controller.cap is not None and webcam_controller.cap.isOpened():
+        _last_webcam_probe_result = True
+        return True
+
+    now = time.time()
+    if (now - _last_webcam_probe_time) < 2.0:
+        return _last_webcam_probe_result
+
+    _last_webcam_probe_time = now
+
+    if os.name != "nt":
+        video_nodes = sorted(glob.glob("/dev/video*"))
+        has_uvc = False
+        for v in video_nodes:
+            suffix = v.replace("/dev/video", "")
+            if suffix.isdigit():
+                if is_usb_uvc_device(int(suffix)):
+                    has_uvc = True
+                    break
+        _last_webcam_probe_result = has_uvc
+        return has_uvc
+    else:
+        has_cam = False
+        try:
+            test_cap = cv2.VideoCapture(webcam_controller.camera_index, cv2.CAP_DSHOW)
+            if test_cap is not None and test_cap.isOpened():
+                has_cam = True
+                test_cap.release()
+            elif test_cap is not None:
+                test_cap.release()
+        except Exception:
+            has_cam = False
+        _last_webcam_probe_result = has_cam
+        return has_cam
+
 
 def capture_leaf_surface(
     side: str,
@@ -862,6 +908,7 @@ def capture_leaf_surface(
     t0 = time.perf_counter()
     frame = None
     source_mode = "WEBCAM_CAPTURE"
+    captured_from_live = False
 
     if uploaded_bytes:
         arr = np.frombuffer(uploaded_bytes, dtype=np.uint8)
@@ -872,37 +919,51 @@ def capture_leaf_surface(
 
     # Grab the current real-time frame from active webcam preview
     if frame is None and not prefer_simulation:
-        # Priority 1: worker thread latest frame (instantaneous, thread-safe, 0 latency)
+        # 1. Pastikan webcam fisik terhubung sebelum mengizinkan proses pengambilan foto
+        if not is_physical_camera_connected() and (
+            webcam_controller.cap is None or not webcam_controller.cap.isOpened()
+        ):
+            webcam_controller.release_hardware()
+            raise RuntimeError(
+                "Gagal mengambil foto: Webcam USB fisik tidak terhubung atau terputus! "
+                "Harap tancapkan kabel webcam USB ke port USB Arduino UNO Q terlebih dahulu."
+            )
+
+        # Priority 1: worker thread latest frame (hanya jika bukan bingkai peringatan disconnected)
         if webcam_controller.worker is not None and webcam_controller.worker.is_alive():
-            live = webcam_controller.worker.get_frame()
-            if live is not None and live.size > 0:
-                frame = live.copy()
-                source_mode = webcam_controller.last_source_mode
+            if webcam_controller.last_source_mode != "WEBCAM_DISCONNECTED":
+                live = webcam_controller.worker.get_frame()
+                if live is not None and live.size > 0:
+                    frame = live.copy()
+                    source_mode = webcam_controller.last_source_mode
+                    captured_from_live = True
 
-        # Priority 2: cached last frame
-        if frame is None and webcam_controller.last_frame is not None and webcam_controller.last_frame.size > 0:
-            frame = webcam_controller.last_frame.copy()
-            source_mode = webcam_controller.last_source_mode
-
-        # Priority 3: direct read only if worker is NOT running
-        if frame is None and (webcam_controller.worker is None or not webcam_controller.worker.is_alive()):
+        # Priority 2: direct read jika stream belum berjalan
+        if frame is None:
+            if webcam_controller.cap is None or not webcam_controller.cap.isOpened():
+                webcam_controller.start_camera(side=side)
             if webcam_controller.cap is not None and webcam_controller.cap.isOpened():
                 for _ in range(5):
                     ret, direct_frame = webcam_controller.cap.read()
                     if ret and direct_frame is not None and direct_frame.size > 0:
                         frame = direct_frame.copy()
                         source_mode = f"USB_WEBCAM_LIVE (video{webcam_controller.camera_index})"
+                        captured_from_live = True
                         break
-                    time.sleep(0.03)
+                    time.sleep(0.04)
 
         # Release hardware completely and turn off LED ring immediately after capturing frame
         webcam_controller.release_hardware()
 
-    # Jika webcam fisik tidak terdeteksi atau gambar gagal diambil, lempar error jelas (bukan daun sintetis palsu)
-    if frame is None or frame.size == 0 or webcam_controller.last_source_mode == "WEBCAM_DISCONNECTED":
+    # Validasi keras: Jangan pernah simpan bingkai diagnostik terputus atau frame kosong ke disk
+    if (
+        (frame is None or frame.size == 0 or not captured_from_live)
+        and not uploaded_bytes
+        and not prefer_simulation
+    ):
         webcam_controller.release_hardware()
         raise RuntimeError(
-            "Gagal mengambil foto: Webcam USB fisik tidak terhubung atau gagal merespons. "
+            "Gagal mengambil foto: Webcam USB fisik tidak terhubung atau gagal menghasilkan frame valid. "
             "Pastikan kabel USB webcam terpasang dengan baik pada port USB Host Arduino UNO Q."
         )
 

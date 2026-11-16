@@ -227,8 +227,8 @@
       <div class="realtime-strip px-2.5 py-2 mt-2 space-y-1.5">
         <div class="flex items-center justify-between text-[10px] px-0.5">
           <div class="flex items-center gap-1.5 font-semibold tracking-wide uppercase text-emerald-400">
-            <span class="live-dot"></span>
-            <span>Pantauan Sensor Kebun (Real-Time)</span>
+            <span id="sensorLiveDot" class="live-dot"></span>
+            <span id="barSensorStatusText">Pantauan Sensor Kebun (Real-Time)</span>
           </div>
           <span id="barSensorTime" class="font-mono-num text-slate-400">Live • ESP32</span>
         </div>
@@ -262,6 +262,19 @@
             <div id="barSpikeSub" class="text-[9px] text-emerald-400 font-medium truncate">Aman</div>
           </div>
         </div>
+      </div>
+
+      <!-- Alert Banner saat Node ESP32 Terputus / Belum Aktif -->
+      <div id="esp32OfflineBanner" class="hidden mt-2 p-2.5 rounded-lg bg-rose-950/80 border border-rose-500/50 text-rose-300 text-xs flex items-center justify-between gap-2 shadow-sm animate-fadeIn">
+        <div class="flex items-center gap-2">
+          <svg class="w-4 h-4 shrink-0 text-rose-400 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span class="font-medium text-[11px]">Node Sensor ESP32S3 belum terdeteksi / terputus. Menunggu transmisi telemetri Wi-Fi...</span>
+        </div>
+        <span class="text-[10px] font-mono-num font-bold text-rose-300 px-2 py-0.5 rounded bg-rose-900/70 border border-rose-700/60 shrink-0">OFFLINE</span>
       </div>
     </div>
   </header>
@@ -990,6 +1003,10 @@
         <div class="flex items-center justify-between p-2 rounded-lg bg-slate-50 border border-slate-200/80">
           <span class="text-slate-500">Sensor Kebun (ESP32 Wi-Fi)</span>
           <span id="hwEsp32LastSeen" class="font-mono-num font-medium text-emerald-700">Terhubung</span>
+        </div>
+        <div class="flex items-center justify-between p-2 rounded-lg bg-slate-50 border border-slate-200/80">
+          <span class="text-slate-500">Kamera USB (Rig Optik)</span>
+          <span id="hwWebcamStatus" class="font-medium text-emerald-700">Terdeteksi</span>
         </div>
       </div>
 
