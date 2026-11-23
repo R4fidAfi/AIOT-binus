@@ -4,6 +4,8 @@ Serves the Mobile-First Web Application (/web_app) and REST API (/api/v1/*).
 """
 
 import os
+import socket
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
@@ -276,10 +278,50 @@ def seed_initial_inspections_if_empty() -> None:
         )
 
 
+UDP_DISCOVERY_PORT = 8001
+_udp_discovery_started = False
+
+
+def _udp_discovery_worker() -> None:
+    """
+    Responder UDP ringan di latar belakang agar node sensor ESP32S3 menemukan IP server
+    Arduino UNO Q secara instan (<10ms) meski IP DHCP hotspot berubah-ubah.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("0.0.0.0", UDP_DISCOVERY_PORT))
+        print(f"[UDP_DISCOVERY] Siap melayani auto-discovery ESP32 pada UDP port {UDP_DISCOVERY_PORT}", flush=True)
+    except OSError as exc:
+        print(f"[UDP_DISCOVERY] Port {UDP_DISCOVERY_PORT} sudah terpakai/tidak tersedia: {exc}", flush=True)
+        sock.close()
+        return
+
+    while True:
+        try:
+            data, addr = sock.recvfrom(256)
+            msg = data.decode("utf-8", errors="ignore").strip()
+            if msg == "DISCOVER_IPOMOEA_SERVER":
+                probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    probe.connect((addr[0], 9))
+                    server_ip = probe.getsockname()[0]
+                finally:
+                    probe.close()
+                reply = f"IPOMOEA_SERVER:{server_ip}:8000".encode("utf-8")
+                sock.sendto(reply, addr)
+        except Exception:
+            time.sleep(0.1)
+
+
 @app.on_event("startup")
 def on_startup() -> None:
+    global _udp_discovery_started
     init_db()
     seed_initial_inspections_if_empty()
+    if not _udp_discovery_started:
+        _udp_discovery_started = True
+        threading.Thread(target=_udp_discovery_worker, daemon=True).start()
 
 
 @app.get("/", include_in_schema=False)
